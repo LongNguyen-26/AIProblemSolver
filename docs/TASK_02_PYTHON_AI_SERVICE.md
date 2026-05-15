@@ -48,8 +48,9 @@ pydantic>=2.0.0
 ## 3. `ai_service/.env.example`
 
 ```env
-OPENAI_API_KEY=sk-your-key-here
-OPENAI_MODEL=gpt-4o
+GROQ_API_KEY=gsk-your-key-here
+GROQ_MODEL=openai/gpt-oss-120b
+GROQ_BASE_URL=https://api.groq.com/openai/v1
 MAX_TOKENS=4096
 ```
 
@@ -63,12 +64,13 @@ import os
 
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY is not set in .env")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY is not set in .env")
 ```
 
 ---
@@ -156,11 +158,11 @@ def image_base64_to_text(image_base64: str) -> str:
 
 ```python
 from openai import OpenAI
-from config import OPENAI_API_KEY, OPENAI_MODEL, MAX_TOKENS
+from config import GROQ_API_KEY, GROQ_MODEL, GROQ_BASE_URL, MAX_TOKENS
 from models.schemas import ProblemSchema
 import json
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
 
 ANALYZE_SYSTEM_PROMPT = """
 You are an expert competitive programming problem analyzer.
@@ -178,7 +180,7 @@ Respond with ONLY valid JSON, no markdown, no explanation.
 
 def analyze_problem(text: str) -> ProblemSchema:
     response = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=GROQ_MODEL,
         max_tokens=MAX_TOKENS,
         response_format={"type": "json_object"},
         messages=[
@@ -196,12 +198,12 @@ def analyze_problem(text: str) -> ProblemSchema:
 
 ```python
 from openai import OpenAI
-from config import OPENAI_API_KEY, OPENAI_MODEL, MAX_TOKENS
+from config import GROQ_API_KEY, GROQ_MODEL, GROQ_BASE_URL, MAX_TOKENS
 from models.schemas import ProblemSchema, TestCaseSchema, TestCaseResponse
 import json
 import uuid
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
 
 def generate_testcases(
     problem: ProblemSchema, count: int, include_edge_cases: bool
@@ -231,7 +233,7 @@ Return ONLY valid JSON with this structure:
 """
 
     response = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=GROQ_MODEL,
         max_tokens=MAX_TOKENS,
         response_format={"type": "json_object"},
         messages=[{"role": "user", "content": prompt}]
@@ -254,11 +256,11 @@ Return ONLY valid JSON with this structure:
 
 ```python
 from openai import OpenAI
-from config import OPENAI_API_KEY, OPENAI_MODEL, MAX_TOKENS
+from config import GROQ_API_KEY, GROQ_MODEL, GROQ_BASE_URL, MAX_TOKENS
 from models.schemas import ProblemSchema, CodeGenResponse
 import json
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
 
 TYPE_INSTRUCTIONS = {
     "AC": "Write a CORRECT, optimal solution. It must pass all test cases.",
@@ -287,7 +289,7 @@ Return ONLY valid JSON:
 }}
 """
     response = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=GROQ_MODEL,
         max_tokens=MAX_TOKENS,
         response_format={"type": "json_object"},
         messages=[{"role": "user", "content": prompt}]
@@ -394,7 +396,7 @@ if __name__ == "__main__":
 cd ai_service
 pip install -r requirements.txt
 cp .env.example .env
-# Điền OPENAI_API_KEY vào .env
+# Điền GROQ_API_KEY vào .env
 python main.py
 ```
 
@@ -406,7 +408,7 @@ Kiểm tra: `http://localhost:8000/health` → `{"status":"ok"}`
 
 - [ ] Tạo đủ cấu trúc thư mục `ai_service/`
 - [ ] `requirements.txt` tạo xong
-- [ ] `.env` với OPENAI_API_KEY hợp lệ
+- [ ] `.env` với GROQ_API_KEY hợp lệ
 - [ ] `schemas.py` với đầy đủ Pydantic models
 - [ ] 3 routers tạo xong: `/analyze`, `/testcase`, `/codegen`
 - [ ] 4 service files tạo xong

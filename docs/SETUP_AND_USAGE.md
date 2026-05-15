@@ -41,9 +41,11 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Mở `.env` và điền `OPENAI_API_KEY`:
+Mở `.env` và điền `GROQ_API_KEY`:
 ```
-OPENAI_API_KEY=sk-...
+GROQ_API_KEY=gsk-...
+GROQ_MODEL=openai/gpt-oss-120b
+GROQ_BASE_URL=https://api.groq.com/openai/v1
 ```
 
 Chạy service:
@@ -145,4 +147,4 @@ Trạng thái "● Online" màu xanh = kết nối thành công.
 → Ảnh mờ hoặc Tesseract chưa cài. Thử dùng Text input thay thế.
 
 **Timeout khi gọi AI**
-→ Kiểm tra OPENAI_API_KEY, kiểm tra kết nối mạng.
+→ Kiểm tra GROQ_API_KEY, kiểm tra kết nối mạng.

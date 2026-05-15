@@ -18,10 +18,10 @@
 │   │  - ReportService         │   │  - Code Generation       │  │
 │   └──────────────────────────┘   └──────────┬───────────────┘  │
 │            │                                │                   │
-│            │ ProcessBuilder                 │ OpenAI API        │
+│            │ ProcessBuilder                 │ Groq API          │
 │            ▼                                ▼                   │
 │   ┌──────────────────┐          ┌───────────────────────┐      │
-│   │  sandbox/        │          │  OpenAI GPT-4o        │      │
+│   │  sandbox/        │          │  Groq GPT-OSS 120B    │      │
 │   │  (temp compile   │          │  (External API)       │      │
 │   │   & run)         │          └───────────────────────┘      │
 │   └──────────────────┘                                         │
@@ -172,7 +172,7 @@ Sinh code mẫu (AC / WA / TLE)
 |---|---|---|
 | Giao tiếp Java ↔ Python | REST HTTP (localhost) | Đơn giản, không cần JNI, dễ debug |
 | Sandbox execution | ProcessBuilder + timeout | Không cần Docker cho demo, dễ cài đặt |
-| AI Provider | OpenAI GPT-4o | Hỗ trợ vision (ảnh đề bài), JSON mode |
+| AI Provider | Groq `openai/gpt-oss-120b` | Production model, context lớn, tốt cho JSON/code generation |
 | OCR | Tesseract (pytesseract) | Free, chạy local, không cần API |
 | JSON | Gson (Java) + Pydantic (Python) | Consistent serialization |
 | Config | config.properties + .env | Tách biệt Java config và Python config |

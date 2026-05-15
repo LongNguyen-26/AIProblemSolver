@@ -8,7 +8,7 @@
 |---|---|
 | Frontend / Execution Engine | Java 16 + JavaFX 17 (Maven) |
 | AI Microservice | Python 3.10+ (FastAPI) |
-| AI Provider | OpenAI API (GPT-4o / GPT-4o-mini) |
+| AI Provider | Groq API (`openai/gpt-oss-120b`) |
 | OCR (ảnh → text) | Tesseract OCR (qua Python) |
 | HTTP Bridge | Java `HttpClient` ↔ FastAPI REST |
 | Code Sandbox | ProcessBuilder (Java) + Docker (tuỳ chọn) |
