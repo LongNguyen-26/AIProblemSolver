@@ -19,17 +19,18 @@ import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.GridPane;
 import javafx.stage.FileChooser;
 import org.example.model.TestCase;
+import org.example.service.ReportService;
 import org.example.ui.util.AlertUtil;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.ResourceBundle;
 import java.util.UUID;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import java.util.function.Consumer;
 
 public class TestCaseController implements Initializable {
     @FXML private TableView<TestCase> testCaseTable;
@@ -45,6 +46,9 @@ public class TestCaseController implements Initializable {
     @FXML private TextArea detailActualArea;
 
     private final ObservableList<TestCase> testCases = FXCollections.observableArrayList();
+    private final ReportService reportService = new ReportService();
+    private Consumer<List<TestCase>> testCasesUpdatedListener = updated -> {
+    };
     private boolean updatingDetails;
 
     @Override
@@ -60,6 +64,11 @@ public class TestCaseController implements Initializable {
 
     public List<TestCase> getTestCases() {
         return List.copyOf(testCases);
+    }
+
+    public void setOnTestCasesUpdated(Consumer<List<TestCase>> listener) {
+        this.testCasesUpdatedListener = listener == null ? updated -> {
+        } : listener;
     }
 
     public void refreshTable() {
@@ -114,7 +123,10 @@ public class TestCaseController implements Initializable {
             );
         });
 
-        dialog.showAndWait().ifPresent(testCases::add);
+        dialog.showAndWait().ifPresent(testCase -> {
+            testCases.add(testCase);
+            notifyTestCasesUpdated();
+        });
     }
 
     @FXML
@@ -126,6 +138,7 @@ public class TestCaseController implements Initializable {
         }
         testCases.remove(selected);
         clearDetails();
+        notifyTestCasesUpdated();
     }
 
     @FXML
@@ -144,13 +157,15 @@ public class TestCaseController implements Initializable {
             return;
         }
 
-        try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(target))) {
-            for (TestCase testCase : testCases) {
-                String id = safeId(testCase.getId());
-                writeZipEntry(zip, id + ".in", valueOrEmpty(testCase.getInput()));
-                writeZipEntry(zip, id + ".out", valueOrEmpty(testCase.getExpectedOutput()));
-            }
-            AlertUtil.showInfo(testCaseTable.getScene().getWindow(), "Da export: " + target.getName());
+        try {
+            String temporaryPath = reportService.exportTestCasesZip(testCases);
+            Files.move(
+                    Paths.get(temporaryPath),
+                    target.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+            AlertUtil.showInfo(testCaseTable.getScene().getWindow(),
+                    "Da export " + testCases.size() + " test cases: " + target.getName());
         } catch (Exception e) {
             AlertUtil.showError(testCaseTable.getScene().getWindow(), "Loi export ZIP: " + e.getMessage());
         }
@@ -191,12 +206,14 @@ public class TestCaseController implements Initializable {
             if (!updatingDetails && testCaseTable.getSelectionModel().getSelectedItem() != null) {
                 testCaseTable.getSelectionModel().getSelectedItem().setInput(value);
                 testCaseTable.refresh();
+                notifyTestCasesUpdated();
             }
         });
         detailExpectedArea.textProperty().addListener((observable, oldValue, value) -> {
             if (!updatingDetails && testCaseTable.getSelectionModel().getSelectedItem() != null) {
                 testCaseTable.getSelectionModel().getSelectedItem().setExpectedOutput(value);
                 testCaseTable.refresh();
+                notifyTestCasesUpdated();
             }
         });
     }
@@ -254,18 +271,8 @@ public class TestCaseController implements Initializable {
         updatingDetails = false;
     }
 
-    private void writeZipEntry(ZipOutputStream zip, String name, String content) throws Exception {
-        ZipEntry entry = new ZipEntry(name);
-        zip.putNextEntry(entry);
-        zip.write(content.getBytes(StandardCharsets.UTF_8));
-        zip.closeEntry();
-    }
-
-    private String safeId(String id) {
-        String value = id == null || id.isBlank()
-                ? "tc_" + UUID.randomUUID().toString().substring(0, 8)
-                : id;
-        return value.replaceAll("[^a-zA-Z0-9_-]", "_");
+    private void notifyTestCasesUpdated() {
+        testCasesUpdatedListener.accept(List.copyOf(testCases));
     }
 
     private String valueOrEmpty(String value) {

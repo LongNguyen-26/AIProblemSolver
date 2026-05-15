@@ -58,6 +58,7 @@ public class MainController implements Initializable {
         updateInputMode(imageModeBtn.isSelected());
         resultViewController.setAiService(aiService);
         resultViewController.setResultUpdateListener(testcaseViewController::refreshTable);
+        testcaseViewController.setOnTestCasesUpdated(this::onTestCasesUpdated);
         checkServiceAsync();
     }
 
@@ -185,6 +186,11 @@ public class MainController implements Initializable {
     private void showError(String message) {
         AlertUtil.showError(getWindow(), message);
         setStatus("Loi: " + message);
+    }
+
+    public void onTestCasesUpdated(List<TestCase> updated) {
+        resultViewController.setTestCases(updated);
+        setStatus("Da cap nhat " + updated.size() + " test cases");
     }
 
     private Window getWindow() {

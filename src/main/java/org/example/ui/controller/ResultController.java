@@ -12,14 +12,21 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.stage.FileChooser;
+import org.example.model.AnalysisReport;
 import org.example.model.CodeSubmission;
 import org.example.model.Problem;
 import org.example.model.TestCase;
 import org.example.service.AIBridgeService;
 import org.example.service.ExecutionService;
+import org.example.service.ReportService;
 import org.example.ui.util.AlertUtil;
 
+import java.io.File;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.ResourceBundle;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +45,7 @@ public class ResultController implements Initializable {
 
     private final ObservableList<TestCase> testCases = FXCollections.observableArrayList();
     private final ExecutionService executionService = new ExecutionService();
+    private final ReportService reportService = new ReportService();
     private AIBridgeService aiService = new AIBridgeService();
     private Problem problem;
     private Runnable resultUpdateListener = () -> {
@@ -152,8 +160,33 @@ public class ResultController implements Initializable {
 
     @FXML
     private void onExportReport() {
-        AlertUtil.showInfo(codeArea.getScene().getWindow(),
-                "Export report se duoc trien khai o Task 06.");
+        if (problem == null || testCases.isEmpty()) {
+            AlertUtil.showWarning(codeArea.getScene().getWindow(), "Chua co du lieu de xuat bao cao.");
+            return;
+        }
+
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Luu bao cao HTML");
+        fileChooser.setInitialFileName(reportFilename());
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("HTML files", "*.html"));
+        File destination = fileChooser.showSaveDialog(codeArea.getScene().getWindow());
+        if (destination == null) {
+            return;
+        }
+
+        try {
+            AnalysisReport report = buildReport();
+            String temporaryPath = reportService.exportHtmlReport(report);
+            Files.move(
+                    Paths.get(temporaryPath),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+            );
+            AlertUtil.showInfo(codeArea.getScene().getWindow(),
+                    "Da luu bao cao: " + destination.getAbsolutePath());
+        } catch (Exception e) {
+            AlertUtil.showError(codeArea.getScene().getWindow(), "Loi xuat bao cao: " + e.getMessage());
+        }
     }
 
     private void displaySubmission(CodeSubmission submission) {
@@ -180,6 +213,45 @@ public class ResultController implements Initializable {
         summaryLabel.setStyle(accepted == total && finished == total
                 ? "-fx-text-fill: #7bd88f; -fx-font-weight: bold;"
                 : "-fx-text-fill: #e38284; -fx-font-weight: bold;");
+    }
+
+    private AnalysisReport buildReport() {
+        AnalysisReport report = new AnalysisReport();
+        report.setProblem(problem);
+        report.setTestCases(List.copyOf(testCases));
+        report.setOverallVerdict(computeOverallVerdict());
+
+        String code = codeArea.getText();
+        if (code != null && !code.isBlank()) {
+            CodeSubmission submission = new CodeSubmission(
+                    code,
+                    languageCombo.getValue(),
+                    codeTypeCombo.getValue()
+            );
+            submission.setExplanation(explanationArea.getText());
+            report.setSubmission(submission);
+        }
+        return report;
+    }
+
+    private String computeOverallVerdict() {
+        if (testCases.isEmpty()) {
+            return "WEAK";
+        }
+        boolean allAccepted = testCases.stream().allMatch(testCase -> "AC".equals(testCase.getVerdict()));
+        boolean anyAccepted = testCases.stream().anyMatch(testCase -> "AC".equals(testCase.getVerdict()));
+        if (allAccepted) {
+            return "STRONG";
+        }
+        return anyAccepted ? "WEAK" : "INCORRECT";
+    }
+
+    private String reportFilename() {
+        String title = problem == null ? "problem" : valueOrEmpty(problem.getTitle());
+        String safeTitle = title.isBlank()
+                ? "problem"
+                : title.replaceAll("[^a-zA-Z0-9_-]+", "_");
+        return "report_" + safeTitle + ".html";
     }
 
     private TableCell<TestCase, String> verdictCell() {
