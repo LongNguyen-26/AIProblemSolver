@@ -54,10 +54,17 @@ public class AIBridgeService {
 
     public List<TestCase> generateTestCases(Problem problem, int count,
                                             boolean includeEdgeCases) throws Exception {
+        return generateTestCases(problem, count, includeEdgeCases, "SMALL");
+    }
+
+    public List<TestCase> generateTestCases(Problem problem, int count,
+                                            boolean includeEdgeCases,
+                                            String profile) throws Exception {
         Map<String, Object> body = new HashMap<>();
         body.put("problem", problem);
         body.put("count", count);
         body.put("include_edge_cases", includeEdgeCases);
+        body.put("profile", profile == null || profile.isBlank() ? "SMALL" : profile);
 
         JsonObject response = HttpUtil.postJson(baseUrl + "/testcase", body, JsonObject.class);
         JsonArray testCaseArray = response.getAsJsonArray("testcases");

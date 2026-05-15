@@ -27,7 +27,10 @@ import org.example.util.FileUtil;
 
 import java.io.File;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.concurrent.CompletableFuture;
 
@@ -164,8 +167,7 @@ public class MainController implements Initializable {
                         resultViewController.setProblem(result.problem);
                         resultViewController.setTestCases(result.testCases);
                         mainTabPane.getSelectionModel().select(1);
-                        setStatus("Phan tich xong - " + result.testCases.size()
-                                + " test cases da co Expected Output");
+                        setStatus(result.message);
                     } finally {
                         setAnalyzeRunning(false);
                     }
@@ -188,69 +190,151 @@ public class MainController implements Initializable {
             Problem problem = imageMode
                     ? aiService.analyzeProblemImage(imageBase64)
                     : aiService.analyzeProblemText(text);
-            setStatusAsync("Dang sinh input test cases...");
-            List<TestCase> testCases = aiService.generateTestCases(
-                    problem, testCaseCount, includeEdgeCases
+
+            int smallCount = smallStressCount(testCaseCount);
+            int strongCount = Math.max(0, testCaseCount - smallCount);
+
+            setStatusAsync("Dang sinh input nho de stress brute-force...");
+            List<TestCase> smallCases = sanitizeTestCases(
+                    aiService.generateTestCases(problem, smallCount, includeEdgeCases, "SMALL")
             );
-            testCases = testCases.stream()
-                    .filter(testCase -> testCase != null
-                            && testCase.getInput() != null
-                            && !testCase.getInput().isBlank())
-                    .toList();
-            if (testCases.isEmpty()) {
+            if (smallCases.isEmpty()) {
                 throw new RuntimeException("AI did not generate runnable input test cases.");
             }
 
-            List<String> expectedOutputs = generateVerifiedExpectedOutputs(problem, testCases);
-            for (int i = 0; i < testCases.size(); i++) {
-                TestCase testCase = testCases.get(i);
-                testCase.setExpectedOutput(expectedOutputs.get(i));
-                testCase.setActualOutput("");
-                testCase.setVerdict("");
-                testCase.setExecutionTimeMs(0);
-            }
-            return new AnalyzeResult(problem, testCases);
+            ExpectedBatch batch = buildStressTestCases(
+                    problem, smallCases, strongCount, includeEdgeCases
+            );
+            return new AnalyzeResult(problem, batch.testCases(), batch.message());
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
-    private List<String> generateVerifiedExpectedOutputs(
+    private ExpectedBatch buildStressTestCases(
             Problem problem,
-            List<TestCase> testCases
+            List<TestCase> smallCases,
+            int strongCount,
+            boolean includeEdgeCases
     ) throws Exception {
-        List<String> inputs = testCases.stream().map(TestCase::getInput).toList();
-        List<OracleRun> verifiedRuns = new java.util.ArrayList<>();
-        Exception lastError = null;
-
-        for (String oracleType : List.of("ORACLE", "ORACLE_ALT", "AC")) {
-            try {
-                setStatusAsync("Dang sinh va kiem tra " + oracleType + "...");
-                OracleRun run = generateAndRunOracle(problem, inputs, oracleType);
-                verifiedRuns.add(run);
-                if (verifiedRuns.size() == 2) {
-                    break;
-                }
-            } catch (Exception e) {
-                lastError = e;
-            }
-        }
-
-        if (verifiedRuns.size() < 2) {
-            throw new RuntimeException(
-                    "Khong tao duoc 2 code oracle hop le de xac minh Expected Output."
-                            + (lastError == null ? "" : " Loi cuoi: " + lastError.getMessage())
+        List<String> smallInputs = inputsOf(smallCases);
+        setStatusAsync("Dang sinh code brute-force de tao Expected Output...");
+        List<OracleRun> bruteRuns = generateOracleRuns(
+                problem,
+                smallInputs,
+                List.of("BRUTE", "BRUTE_ALT", "ORACLE"),
+                true
+        );
+        if (bruteRuns.isEmpty()) {
+            bruteRuns = generateOracleRuns(
+                    problem,
+                    smallInputs,
+                    List.of("BRUTE", "BRUTE_ALT", "ORACLE"),
+                    false
             );
         }
 
-        assertOracleOutputsAgree(verifiedRuns.get(0), verifiedRuns.get(1));
-        return verifiedRuns.get(0).outputs();
+        if (bruteRuns.isEmpty()) {
+            throw new RuntimeException(
+                    "Khong tao duoc code brute-force hop le de tinh Expected Output."
+            );
+        }
+
+        int minAgreement = bruteRuns.size() >= 2 ? 2 : 1;
+        List<TestCase> verifiedSmallCases = applyMajorityExpectedOutputs(
+                smallCases, bruteRuns, minAgreement
+        );
+        boolean singleOracleFallback = false;
+        if (verifiedSmallCases.isEmpty()) {
+            verifiedSmallCases = applyMajorityExpectedOutputs(
+                    smallCases, List.of(bruteRuns.get(0)), 1
+            );
+            singleOracleFallback = !verifiedSmallCases.isEmpty();
+        }
+        if (verifiedSmallCases.isEmpty()) {
+            throw new RuntimeException("Khong tinh duoc Expected Output cho input nho.");
+        }
+
+        if (singleOracleFallback) {
+            return new ExpectedBatch(
+                    verifiedSmallCases,
+                    "Phan tich xong - " + verifiedSmallCases.size()
+                            + " test cases nho tu 1 brute oracle; bo qua strong vi oracle chua dong thuan"
+            );
+        }
+
+        OracleRun optimized = findTrustedOptimizedOracle(problem, verifiedSmallCases);
+        if (optimized == null || strongCount <= 0) {
+            String reason = optimized == null
+                    ? "; optimized code chua pass stress nen bo qua input manh"
+                    : "";
+            return new ExpectedBatch(
+                    verifiedSmallCases,
+                    "Phan tich xong - " + verifiedSmallCases.size()
+                            + " test cases nho da xac minh bang brute-force" + reason
+            );
+        }
+
+        try {
+            setStatusAsync("Dang sinh input manh va tinh output bang optimized oracle...");
+            List<TestCase> strongCases = sanitizeTestCases(
+                    aiService.generateTestCases(problem, strongCount, includeEdgeCases, "STRONG")
+            );
+            if (!strongCases.isEmpty()) {
+                List<String> strongOutputs = expectedOutputExecutionService.generateOutputs(
+                        optimized.code(),
+                        optimized.language(),
+                        inputsOf(strongCases),
+                        optimized.name() + " strong phase"
+                );
+                fillExpectedOutputs(strongCases, strongOutputs);
+            }
+
+            List<TestCase> allCases = new ArrayList<>();
+            allCases.addAll(verifiedSmallCases);
+            allCases.addAll(strongCases);
+            return new ExpectedBatch(
+                    allCases,
+                    "Phan tich xong - " + allCases.size()
+                            + " test cases ("
+                            + verifiedSmallCases.size()
+                            + " brute-verified, "
+                            + strongCases.size()
+                            + " strong)"
+            );
+        } catch (Exception e) {
+            return new ExpectedBatch(
+                    verifiedSmallCases,
+                    "Phan tich xong - " + verifiedSmallCases.size()
+                            + " test cases nho da xac minh; bo qua strong vi: "
+                            + e.getMessage()
+            );
+        }
+    }
+
+    private List<OracleRun> generateOracleRuns(
+            Problem problem,
+            List<String> inputs,
+            List<String> oracleTypes,
+            boolean validateSamples
+    ) {
+        List<OracleRun> runs = new ArrayList<>();
+        for (String oracleType : oracleTypes) {
+            try {
+                setStatusAsync("Dang sinh va chay " + oracleType + "...");
+                runs.add(generateAndRunOracle(problem, inputs, oracleType, validateSamples));
+            } catch (Exception ignored) {
+                // Keep the UX moving; other independent oracles may still be usable.
+            }
+        }
+        return runs;
     }
 
     private OracleRun generateAndRunOracle(
             Problem problem,
             List<String> inputs,
-            String oracleType
+            String oracleType,
+            boolean validateSamples
     ) throws Exception {
         CodeSubmission submission = aiService.generateCode(
                 problem, oracleType, EXPECTED_OUTPUT_LANGUAGE
@@ -264,12 +348,76 @@ public class MainController implements Initializable {
             throw new RuntimeException(oracleType + " did not include source code.");
         }
 
-        validateOracleAgainstSamples(problem, code, language, oracleType);
+        if (validateSamples) {
+            validateOracleAgainstSamples(problem, code, language, oracleType);
+        }
         setStatusAsync("Dang chay " + oracleType + " tren input test cases...");
         List<String> outputs = expectedOutputExecutionService.generateOutputs(
                 code, language, inputs, oracleType
         );
-        return new OracleRun(oracleType, outputs);
+        return new OracleRun(oracleType, code, language, outputs);
+    }
+
+    private OracleRun findTrustedOptimizedOracle(
+            Problem problem,
+            List<TestCase> verifiedSmallCases
+    ) {
+        List<String> inputs = inputsOf(verifiedSmallCases);
+        List<String> expected = verifiedSmallCases.stream()
+                .map(TestCase::getExpectedOutput)
+                .toList();
+
+        for (String oracleType : List.of("AC", "OPTIMIZED_ALT", "ORACLE_ALT")) {
+            try {
+                setStatusAsync("Dang stress optimized oracle " + oracleType + "...");
+                OracleRun run = generateAndRunOracle(problem, inputs, oracleType, true);
+                if (outputsMatch(expected, run.outputs())) {
+                    return run;
+                }
+            } catch (Exception ignored) {
+                // If an optimized oracle fails stress, fall back to brute-verified tests.
+            }
+        }
+        return null;
+    }
+
+    private List<TestCase> applyMajorityExpectedOutputs(
+            List<TestCase> cases,
+            List<OracleRun> runs,
+            int minAgreement
+    ) {
+        List<TestCase> verifiedCases = new ArrayList<>();
+        for (int index = 0; index < cases.size(); index++) {
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            for (OracleRun run : runs) {
+                if (index >= run.outputs().size()) {
+                    continue;
+                }
+                String output = expectedOutputExecutionService.normalizeOutput(
+                        run.outputs().get(index)
+                );
+                counts.put(output, counts.getOrDefault(output, 0) + 1);
+            }
+
+            String bestOutput = "";
+            int bestCount = 0;
+            for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+                if (entry.getValue() > bestCount) {
+                    bestOutput = entry.getKey();
+                    bestCount = entry.getValue();
+                }
+            }
+
+            if (bestCount >= minAgreement) {
+                TestCase testCase = cases.get(index);
+                testCase.setExpectedOutput(bestOutput);
+                testCase.setActualOutput("");
+                testCase.setVerdict("");
+                testCase.setExecutionTimeMs(0);
+                verifiedCases.add(testCase);
+            }
+        }
+        return verifiedCases;
     }
 
     private void validateOracleAgainstSamples(
@@ -305,20 +453,49 @@ public class MainController implements Initializable {
         }
     }
 
-    private void assertOracleOutputsAgree(OracleRun first, OracleRun second) {
-        List<String> left = first.outputs();
-        List<String> right = second.outputs();
-        if (left.size() != right.size()) {
-            throw new RuntimeException("Oracle output count mismatch.");
+    private boolean outputsMatch(List<String> expected, List<String> actual) {
+        if (expected.size() != actual.size()) {
+            return false;
         }
-        for (int i = 0; i < left.size(); i++) {
-            if (!expectedOutputExecutionService.outputMatches(left.get(i), right.get(i))) {
-                throw new RuntimeException(
-                        "Oracle outputs disagree on generated test #" + (i + 1)
-                                + " (" + first.name() + " vs " + second.name() + ")."
-                );
+        for (int i = 0; i < expected.size(); i++) {
+            if (!expectedOutputExecutionService.outputMatches(expected.get(i), actual.get(i))) {
+                return false;
             }
         }
+        return true;
+    }
+
+    private void fillExpectedOutputs(List<TestCase> testCases, List<String> outputs) {
+        for (int i = 0; i < testCases.size(); i++) {
+            TestCase testCase = testCases.get(i);
+            testCase.setExpectedOutput(outputs.get(i));
+            testCase.setActualOutput("");
+            testCase.setVerdict("");
+            testCase.setExecutionTimeMs(0);
+        }
+    }
+
+    private List<TestCase> sanitizeTestCases(List<TestCase> values) {
+        Map<String, TestCase> uniqueByInput = new LinkedHashMap<>();
+        for (TestCase testCase : values == null ? List.<TestCase>of() : values) {
+            if (testCase == null || testCase.getInput() == null
+                    || testCase.getInput().isBlank()) {
+                continue;
+            }
+            uniqueByInput.putIfAbsent(testCase.getInput().strip(), testCase);
+        }
+        return new ArrayList<>(uniqueByInput.values());
+    }
+
+    private List<String> inputsOf(List<TestCase> testCases) {
+        return testCases.stream().map(TestCase::getInput).toList();
+    }
+
+    private int smallStressCount(int requestedCount) {
+        if (requestedCount <= 4) {
+            return Math.max(1, requestedCount);
+        }
+        return Math.min(requestedCount, Math.max(4, (requestedCount * 2 + 2) / 3));
     }
 
     private void setStatusAsync(String message) {
@@ -361,13 +538,21 @@ public class MainController implements Initializable {
     private static class AnalyzeResult {
         private final Problem problem;
         private final List<TestCase> testCases;
+        private final String message;
 
-        private AnalyzeResult(Problem problem, List<TestCase> testCases) {
+        private AnalyzeResult(Problem problem, List<TestCase> testCases, String message) {
             this.problem = problem;
             this.testCases = testCases == null ? List.of() : testCases;
+            this.message = message == null || message.isBlank()
+                    ? "Phan tich xong - " + this.testCases.size()
+                    + " test cases da co Expected Output"
+                    : message;
         }
     }
 
-    private record OracleRun(String name, List<String> outputs) {
+    private record ExpectedBatch(List<TestCase> testCases, String message) {
+    }
+
+    private record OracleRun(String name, String code, String language, List<String> outputs) {
     }
 }

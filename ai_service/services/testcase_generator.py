@@ -15,13 +15,17 @@ MAX_TESTCASE_INPUT_CHARS = 20000
 
 
 def generate_testcases(
-    problem: ProblemSchema, count: int, include_edge_cases: bool
+    problem: ProblemSchema,
+    count: int,
+    include_edge_cases: bool,
+    profile: str = "SMALL",
 ) -> TestCaseResponse:
     requested_count = max(1, min(count, 50))
+    normalized_profile = _normalize_profile(profile)
 
     try:
         testcases = _generate_json_testcases(
-            problem, requested_count, include_edge_cases
+            problem, requested_count, include_edge_cases, normalized_profile
         )
         if testcases:
             return TestCaseResponse(
@@ -33,7 +37,7 @@ def generate_testcases(
 
     try:
         testcases = _generate_text_testcases(
-            problem, requested_count, include_edge_cases
+            problem, requested_count, include_edge_cases, normalized_profile
         )
         if testcases:
             return TestCaseResponse(
@@ -50,9 +54,10 @@ def generate_testcases(
 
 
 def _generate_json_testcases(
-    problem: ProblemSchema, count: int, include_edge_cases: bool
+    problem: ProblemSchema, count: int, include_edge_cases: bool, profile: str
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
+    profile_guidance = _profile_guidance(profile)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
 
@@ -61,12 +66,7 @@ Problem:
 
 Generate {count} test cases{edge_case_text}.
 Generate valid stdin inputs only. Do not compute expected outputs.
-Keep every generated input validation-friendly for a local reference solution:
-- prefer small and medium sizes over maximum constraints
-- when variables like n, m, q, t exist, keep them at most 200 unless the sample already exceeds that
-- keep each full stdin under 5000 characters when possible
-- include official sample inputs first when they are present and count allows
-- still cover edge patterns such as minimum size, boundaries, repeated values, overlapping updates, and mixed query order
+{profile_guidance}
 
 Return ONLY valid JSON with this structure:
 {{
@@ -88,9 +88,10 @@ Do not put newline characters inside JSON string values. Use input_lines arrays 
 
 
 def _generate_text_testcases(
-    problem: ProblemSchema, count: int, include_edge_cases: bool
+    problem: ProblemSchema, count: int, include_edge_cases: bool, profile: str
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
+    profile_guidance = _profile_guidance(profile)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
 
@@ -99,12 +100,7 @@ Problem:
 
 Generate {count} test cases{edge_case_text}.
 Generate valid stdin inputs only. Do not compute expected outputs.
-Keep every generated input validation-friendly for a local reference solution:
-- prefer small and medium sizes over maximum constraints
-- when variables like n, m, q, t exist, keep them at most 200 unless the sample already exceeds that
-- keep each full stdin under 5000 characters when possible
-- include official sample inputs first when they are present and count allows
-- still cover edge patterns such as minimum size, boundaries, repeated values, overlapping updates, and mixed query order
+{profile_guidance}
 
 Return only this plain text format, repeated once per test case:
 ###CASE
@@ -230,6 +226,34 @@ def _sample_fallback_testcases(
 
 def _remove_optional_output_section(value: str) -> str:
     return re.split(r"\nOUTPUT:\s*\n", value, maxsplit=1, flags=re.IGNORECASE)[0]
+
+
+def _normalize_profile(profile: str) -> str:
+    value = (profile or "SMALL").strip().upper()
+    return "STRONG" if value == "STRONG" else "SMALL"
+
+
+def _profile_guidance(profile: str) -> str:
+    if profile == "STRONG":
+        return """
+This is the STRONG phase. Generate adversarial but locally runnable inputs:
+- target larger-than-sample sizes and stress patterns, not maximum-only cases
+- when variables like n, m, q, t exist, prefer values from 500 to 5000 when the format allows it
+- keep each full stdin under 20000 characters so local oracle code can run it
+- include patterns that often break optimized code: repeated updates, boundary ranges,
+  all-equal data, alternating data, nested ranges, sorted/reversed data, and many queries
+- do not include official sample inputs unless count is very small
+"""
+
+    return """
+This is the SMALL stress-validation phase. Keep every input suitable for brute force:
+- prefer tiny and small sizes over maximum constraints
+- when variables like n, m, q, t exist, keep them at most 60 unless the sample already exceeds that
+- keep each full stdin under 5000 characters
+- include official sample inputs first when they are present and count allows
+- still cover edge patterns such as minimum size, boundaries, repeated values,
+  overlapping updates, alternating values, and mixed query order
+"""
 
 
 def _is_usable_input(value: str) -> bool:

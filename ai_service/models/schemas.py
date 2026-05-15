@@ -34,6 +34,7 @@ class TestCaseRequest(BaseModel):
     problem: ProblemSchema
     count: int = 10
     include_edge_cases: bool = True
+    profile: str = "SMALL"
 
 
 class TestCaseResponse(BaseModel):

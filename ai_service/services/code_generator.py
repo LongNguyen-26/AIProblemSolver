@@ -15,11 +15,29 @@ TYPE_INSTRUCTIONS = {
         "official constraints are huge but the input is small, use a straightforward "
         "simulation or brute-force approach when that is less error-prone."
     ),
+    "BRUTE": (
+        "Write a complete brute-force reference solution for small validation inputs. "
+        "Prioritize obvious correctness over performance. Directly simulate the "
+        "statement whenever possible, even if the complexity would be too slow for "
+        "official maximum constraints."
+    ),
+    "BRUTE_ALT": (
+        "Write a second independent brute-force reference solution for small "
+        "validation inputs. Use a different implementation style from the obvious "
+        "primary brute force when possible. Prioritize exact statement semantics over "
+        "speed."
+    ),
     "ORACLE_ALT": (
         "Write a complete, correct reference solution used only to cross-check another "
         "oracle on validation-sized generated tests. Use an independent implementation "
         "style or algorithmic approach from the obvious primary solution. Prioritize "
         "exact problem semantics and clarity over speed."
+    ),
+    "OPTIMIZED_ALT": (
+        "Write a complete optimized solution intended for larger generated tests. Use "
+        "an independent implementation style from a standard solution where possible. "
+        "Do not use heuristics or assumptions; it must follow the exact problem "
+        "semantics."
     ),
     "WA": (
         "Write a solution with a subtle bug that gives WRONG ANSWER on some "

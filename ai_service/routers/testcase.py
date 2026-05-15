@@ -10,7 +10,7 @@ router = APIRouter()
 async def testcase(request: TestCaseRequest):
     try:
         return generate_testcases(
-            request.problem, request.count, request.include_edge_cases
+            request.problem, request.count, request.include_edge_cases, request.profile
         )
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
