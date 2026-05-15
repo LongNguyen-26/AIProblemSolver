@@ -1,10 +1,7 @@
-import json
 import uuid
 
-from openai import OpenAI as GroqClient
-
-from config import GROQ_BASE_URL, GROQ_MODEL, MAX_TOKENS, require_groq_api_key
 from models.schemas import ProblemSchema, TestCaseResponse, TestCaseSchema
+from services.groq_json import request_json
 
 
 def generate_testcases(
@@ -32,18 +29,10 @@ Return ONLY valid JSON with this structure:
   ],
   "checker_code": "# Python checker\\ndef check(input_data, expected, actual):\\n    return expected.strip() == actual.strip()"
 }}
+Escape line breaks inside JSON strings as \\n.
 """
 
-    client = GroqClient(api_key=require_groq_api_key(), base_url=GROQ_BASE_URL)
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        max_tokens=MAX_TOKENS,
-        response_format={"type": "json_object"},
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    content = response.choices[0].message.content or "{}"
-    data = json.loads(content)
+    data = request_json([{"role": "user", "content": prompt}])
     testcases = [
         TestCaseSchema(id=f"tc_{str(uuid.uuid4())[:8]}", **testcase)
         for testcase in data.get("testcases", [])

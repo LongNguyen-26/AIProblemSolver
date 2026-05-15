@@ -11,6 +11,7 @@ import java.time.Duration;
 
 public final class HttpUtil {
     private static final HttpClient CLIENT = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(10))
             .build();
     private static final Gson GSON = new Gson();
@@ -23,6 +24,7 @@ public final class HttpUtil {
         String json = GSON.toJson(requestBody);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
+                .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(60))
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
@@ -39,6 +41,7 @@ public final class HttpUtil {
     public static String getString(String url) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
+                .version(HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(10))
                 .GET()
                 .build();
