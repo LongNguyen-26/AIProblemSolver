@@ -1,16 +1,19 @@
 package org.example.ui.controller;
 
 import javafx.application.Platform;
+import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.Tooltip;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.stage.FileChooser;
 import org.example.model.AnalysisReport;
@@ -59,12 +62,16 @@ public class ResultController implements Initializable {
         languageCombo.getSelectionModel().select("cpp");
 
         resultTable.setItems(testCases);
+        resultTable.setFixedCellSize(34.0);
+        resultTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
         rTcIdCol.setCellValueFactory(new PropertyValueFactory<>("id"));
         rVerdictCol.setCellValueFactory(new PropertyValueFactory<>("verdict"));
         rTimeCol.setCellValueFactory(new PropertyValueFactory<>("executionTimeMs"));
-        rDiffCol.setCellValueFactory(new PropertyValueFactory<>("actualOutput"));
+        rDiffCol.setCellValueFactory(features ->
+                new ReadOnlyStringWrapper(diffPreview(features.getValue()))
+        );
         rVerdictCol.setCellFactory(column -> verdictCell());
-        rDiffCol.setCellFactory(column -> singleLineCell());
+        rDiffCol.setCellFactory(column -> diffCell());
     }
 
     public void setAiService(AIBridgeService aiService) {
@@ -277,14 +284,99 @@ public class ResultController implements Initializable {
         };
     }
 
-    private TableCell<TestCase, String> singleLineCell() {
+    private TableCell<TestCase, String> diffCell() {
         return new TableCell<>() {
             @Override
             protected void updateItem(String item, boolean empty) {
                 super.updateItem(item, empty);
-                setText(empty || item == null ? "" : item.replace('\n', ' '));
+                TestCase testCase = getTableRow() == null ? null : getTableRow().getItem();
+                if (empty || testCase == null) {
+                    setText("");
+                    setTooltip(null);
+                    setStyle("");
+                    return;
+                }
+
+                setText(item == null ? "" : item);
+                setTextOverrun(OverrunStyle.ELLIPSIS);
+                setWrapText(false);
+                setTooltip(new Tooltip(diffTooltip(testCase)));
+                setStyle(diffStyle(testCase));
             }
         };
+    }
+
+    private String diffPreview(TestCase testCase) {
+        if (testCase == null) {
+            return "";
+        }
+
+        String verdict = valueOrEmpty(testCase.getVerdict());
+        String expected = compactOutput(testCase.getExpectedOutput());
+        String actual = compactOutput(testCase.getActualOutput());
+
+        if (verdict.isBlank()) {
+            return "";
+        }
+        if ("AC".equals(verdict)) {
+            return actual.isBlank() ? "Matched" : "Matched: " + actual;
+        }
+        if ("WA".equals(verdict)) {
+            return "Expected: " + emptyMarker(expected) + " -> Actual: " + emptyMarker(actual);
+        }
+        if ("TLE".equals(verdict)) {
+            return actual.isBlank() ? "Time limit exceeded" : actual;
+        }
+        if ("CE".equals(verdict)) {
+            return actual.isBlank() ? "Compile error" : actual;
+        }
+        if ("RE".equals(verdict)) {
+            return actual.isBlank() ? "Runtime error" : actual;
+        }
+        return actual;
+    }
+
+    private String diffTooltip(TestCase testCase) {
+        String verdict = valueOrEmpty(testCase.getVerdict());
+        String expected = valueOrEmpty(testCase.getExpectedOutput()).strip();
+        String actual = valueOrEmpty(testCase.getActualOutput()).strip();
+
+        if ("AC".equals(verdict)) {
+            return "Output matched expected value.\n\nActual:\n" + emptyMarker(actual);
+        }
+        return "Expected:\n" + emptyMarker(expected)
+                + "\n\nActual:\n" + emptyMarker(actual);
+    }
+
+    private String diffStyle(TestCase testCase) {
+        String verdict = valueOrEmpty(testCase.getVerdict());
+        return switch (verdict) {
+            case "AC" -> "-fx-text-fill: #9be7ad;";
+            case "WA" -> "-fx-text-fill: #ff9ca0; -fx-font-weight: 600;";
+            case "TLE" -> "-fx-text-fill: #ffd38a;";
+            case "CE" -> "-fx-text-fill: #c9aeff;";
+            case "RE" -> "-fx-text-fill: #f0b074;";
+            default -> "-fx-text-fill: #c7c2b8;";
+        };
+    }
+
+    private String compactOutput(String value) {
+        String text = valueOrEmpty(value)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .strip();
+        if (text.isBlank()) {
+            return "";
+        }
+        return text.lines()
+                .map(String::strip)
+                .filter(line -> !line.isBlank())
+                .reduce((left, right) -> left + " / " + right)
+                .orElse("");
+    }
+
+    private String emptyMarker(String value) {
+        return value == null || value.isBlank() ? "<empty>" : value;
     }
 
     private String rootCauseMessage(Throwable error) {

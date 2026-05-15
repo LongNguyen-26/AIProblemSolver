@@ -158,6 +158,17 @@
     -fx-min-width: 92;
 }
 
+.tooltip {
+    -fx-background-color: #151719;
+    -fx-text-fill: #f4f1eb;
+    -fx-border-color: #34383c;
+    -fx-border-width: 1;
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+    -fx-font-size: 12px;
+    -fx-padding: 8 10 8 10;
+}
+
 .status-online {
     -fx-text-fill: #7bd88f;
     -fx-font-weight: 700;

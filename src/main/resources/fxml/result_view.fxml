@@ -59,10 +59,10 @@
             </HBox>
             <TableView fx:id="resultTable" VBox.vgrow="ALWAYS">
                 <columns>
-                    <TableColumn fx:id="rTcIdCol" text="TC" prefWidth="70.0"/>
-                    <TableColumn fx:id="rVerdictCol" text="Verdict" prefWidth="80.0"/>
-                    <TableColumn fx:id="rTimeCol" text="Time" prefWidth="75.0"/>
-                    <TableColumn fx:id="rDiffCol" text="Diff" prefWidth="150.0"/>
+                    <TableColumn fx:id="rTcIdCol" text="TC" prefWidth="72.0"/>
+                    <TableColumn fx:id="rVerdictCol" text="Verdict" prefWidth="72.0"/>
+                    <TableColumn fx:id="rTimeCol" text="Time" prefWidth="58.0"/>
+                    <TableColumn fx:id="rDiffCol" text="Diff" prefWidth="230.0"/>
                 </columns>
             </TableView>
             <Label text="Explanation:" styleClass="field-label"/>
