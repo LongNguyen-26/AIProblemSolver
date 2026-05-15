@@ -9,6 +9,11 @@ router = APIRouter()
 @router.post("/codegen", response_model=CodeGenResponse)
 async def codegen(request: CodeGenRequest):
     try:
-        return generate_code(request.problem, request.type, request.language)
+        return generate_code(
+            request.problem,
+            request.type,
+            request.language,
+            request.validation_cases,
+        )
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc

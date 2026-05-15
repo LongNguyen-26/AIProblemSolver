@@ -1,4 +1,4 @@
-from models.schemas import CodeGenResponse, ProblemSchema
+from models.schemas import CodeGenResponse, ProblemSchema, TestCaseSchema
 from services.groq_json import request_json, request_text
 
 
@@ -6,54 +6,76 @@ TYPE_INSTRUCTIONS = {
     "AC": (
         "Write a CORRECT, optimal solution. It must pass all test cases. "
         "Do not use heuristics, probabilistic assumptions, or arguments like "
-        "'rare in practice'. Handle adversarial inputs within the stated constraints."
+        "'rare in practice'. Handle adversarial inputs within the stated constraints. "
+        "For constructive or multiple-solution problems, print a deterministic "
+        "canonical valid solution and print an impossibility marker such as "
+        "NO SOLUTION only after the algorithm has proven impossibility."
     ),
     "ORACLE": (
         "Write a complete, correct reference solution used only to compute expected "
         "outputs for validation-sized generated tests. Prioritize exact problem "
         "semantics, simplicity, and debuggability over asymptotic optimality. If the "
         "official constraints are huge but the input is small, use a straightforward "
-        "simulation or brute-force approach when that is less error-prone."
+        "simulation or brute-force approach when that is less error-prone. For "
+        "constructive problems, exhaustively search a valid output on small inputs "
+        "when feasible; do not print NO SOLUTION unless the search proves it."
     ),
     "BRUTE": (
         "Write a complete brute-force reference solution for small validation inputs. "
         "Prioritize obvious correctness over performance. Directly simulate the "
         "statement whenever possible, even if the complexity would be too slow for "
-        "official maximum constraints."
+        "official maximum constraints. For constructive or multiple-solution "
+        "problems, enumerate possible outputs for small inputs and print a valid "
+        "solution if one exists; print NO SOLUTION only after exhaustive proof."
     ),
     "BRUTE_ALT": (
         "Write a second independent brute-force reference solution for small "
         "validation inputs. Use a different implementation style from the obvious "
         "primary brute force when possible. Prioritize exact statement semantics over "
-        "speed."
+        "speed. For constructive or multiple-solution problems, independently "
+        "search for a valid output on small inputs instead of guessing impossibility."
     ),
     "ORACLE_ALT": (
         "Write a complete, correct reference solution used only to cross-check another "
         "oracle on validation-sized generated tests. Use an independent implementation "
         "style or algorithmic approach from the obvious primary solution. Prioritize "
-        "exact problem semantics and clarity over speed."
+        "exact problem semantics and clarity over speed. For constructive problems, "
+        "produce a deterministic valid output and avoid unsupported NO SOLUTION."
     ),
     "OPTIMIZED_ALT": (
         "Write a complete optimized solution intended for larger generated tests. Use "
         "an independent implementation style from a standard solution where possible. "
         "Do not use heuristics or assumptions; it must follow the exact problem "
-        "semantics."
+        "semantics. For constructive or multiple-solution problems, print a "
+        "deterministic canonical valid solution."
     ),
     "WA": (
         "Write a solution with a subtle bug that gives WRONG ANSWER on some "
         "cases. The bug should not be obvious."
     ),
     "TLE": (
-        "Write a solution that is CORRECT but has TIME LIMIT EXCEEDED due to "
-        "poor complexity (e.g., O(n^2) when O(n) is needed)."
+        "Write a solution that is logically CORRECT and should pass sample, small, "
+        "and medium tests, but is intentionally too slow for large/killer tests due "
+        "to poor asymptotic complexity (for example O(n^2) or O(n*q) where an "
+        "optimized solution is expected). Do not use infinite loops, sleeps, random "
+        "behavior, deliberate wrong answers, or compile/runtime errors. If the "
+        "program finishes on a test case, its output must be accepted; a completed "
+        "WRONG ANSWER is not a valid TLE solution. For constructive or "
+        "multiple-solution problems, use a complete slow search or the same "
+        "canonical construction style as a correct solution, not an unsupported "
+        "one-variable heuristic."
     ),
 }
 
 
 def generate_code(
-    problem: ProblemSchema, code_type: str, language: str
+    problem: ProblemSchema,
+    code_type: str,
+    language: str,
+    validation_cases: list[TestCaseSchema] | None = None,
 ) -> CodeGenResponse:
     instruction = TYPE_INSTRUCTIONS.get(code_type, TYPE_INSTRUCTIONS["AC"])
+    validation_text = _validation_cases_prompt(validation_cases or [], code_type)
     prompt = f"""
 {instruction}
 
@@ -61,6 +83,8 @@ Problem:
 {problem.model_dump_json(indent=2)}
 
 Language: {language}
+
+{validation_text}
 
 Before returning, verify mentally that the source follows the input format exactly,
 prints only the required output, and matches all sample inputs/outputs embedded in
@@ -137,3 +161,38 @@ def _strip_code_fence(content: str) -> str:
     if len(lines) >= 3 and lines[-1].strip() == "```":
         return "\n".join(lines[1:-1]).strip()
     return text.strip("`").strip()
+
+
+def _validation_cases_prompt(
+    validation_cases: list[TestCaseSchema], code_type: str
+) -> str:
+    if not validation_cases:
+        return ""
+
+    examples: list[str] = []
+    for index, case in enumerate(validation_cases[:8], start=1):
+        input_text = (case.input or "").strip()
+        expected = (case.expected_output or "").strip()
+        if not input_text or not expected:
+            continue
+        if len(input_text) > 4000 or len(expected) > 4000:
+            continue
+        examples.append(
+            f"Validation case #{index}\n"
+            f"Input:\n{input_text}\n"
+            f"Expected output:\n{expected}"
+        )
+
+    if not examples:
+        return ""
+
+    if code_type == "TLE":
+        rule = (
+            "For the validation cases below, your TLE solution must either print "
+            "exactly the expected output or run too slowly on genuinely large "
+            "inputs. It must never finish with a different output."
+        )
+    else:
+        rule = "Use the validation cases below to match the expected output style."
+
+    return rule + "\n\n" + "\n\n".join(examples)

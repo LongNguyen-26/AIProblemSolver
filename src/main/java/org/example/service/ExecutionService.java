@@ -32,6 +32,14 @@ public class ExecutionService {
         if (testCase == null) {
             throw new IllegalArgumentException("TestCase must not be null");
         }
+        runTestCases(sourceCode, language, List.of(testCase));
+    }
+
+    public void runTestCases(String sourceCode, String language, List<TestCase> testCases)
+            throws Exception {
+        if (testCases == null || testCases.isEmpty()) {
+            return;
+        }
         FileUtil.ensureDir(SANDBOX_PATH.toString());
 
         String normalizedLanguage = normalizeLanguage(language);
@@ -39,13 +47,28 @@ public class ExecutionService {
 
         CompileResult compileResult = compile(normalizedLanguage, sourceFile);
         if (!compileResult.success()) {
-            testCase.setVerdict("CE");
-            testCase.setExecutionTimeMs(0);
-            testCase.setActualOutput(nonBlank(compileResult.stderr(), compileResult.stdout()));
+            String output = nonBlank(compileResult.stderr(), compileResult.stdout());
+            for (TestCase testCase : testCases) {
+                if (testCase == null) {
+                    continue;
+                }
+                testCase.setVerdict("CE");
+                testCase.setExecutionTimeMs(0);
+                testCase.setActualOutput(output);
+            }
             return;
         }
 
-        RunResult runResult = run(normalizedLanguage, testCase.getInput());
+        for (TestCase testCase : testCases) {
+            if (testCase == null) {
+                continue;
+            }
+            RunResult runResult = run(normalizedLanguage, testCase.getInput());
+            applyRunResult(testCase, runResult);
+        }
+    }
+
+    private void applyRunResult(TestCase testCase, RunResult runResult) {
         testCase.setExecutionTimeMs(runResult.timeMs());
         testCase.setActualOutput(runResult.stdout());
 

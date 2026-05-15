@@ -31,11 +31,16 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.ResourceBundle;
 import java.util.concurrent.CompletableFuture;
 
 public class ResultController implements Initializable {
+    private static final int TLE_GENERATION_ATTEMPTS = 3;
+    private static final int MAX_TLE_VALIDATION_CASES = 16;
+    private static final int MAX_TLE_VALIDATION_KILLER_CASES = 5;
+
     @FXML private ComboBox<String> codeTypeCombo;
     @FXML private ComboBox<String> languageCombo;
     @FXML private TextArea codeArea;
@@ -54,6 +59,7 @@ public class ResultController implements Initializable {
     private final ReportService reportService = new ReportService();
     private AIBridgeService aiService = new AIBridgeService();
     private Problem problem;
+    private CodeSubmission preferredAcSubmission;
     private boolean codeGenerationInProgress;
     private boolean testRunInProgress;
     private boolean externalBusy;
@@ -88,6 +94,11 @@ public class ResultController implements Initializable {
 
     public void setProblem(Problem problem) {
         this.problem = problem;
+        this.preferredAcSubmission = null;
+    }
+
+    public void setPreferredAcSubmission(CodeSubmission submission) {
+        this.preferredAcSubmission = submission;
     }
 
     public void setTestCases(List<TestCase> values) {
@@ -118,12 +129,19 @@ public class ResultController implements Initializable {
 
         String codeType = codeTypeCombo.getValue();
         String language = languageCombo.getValue();
+        if ("AC".equals(codeType) && canUsePreferredAc(language)) {
+            displaySubmission(preferredAcSubmission);
+            summaryLabel.setText("Da dung cached AC oracle");
+            summaryLabel.setStyle("");
+            return;
+        }
+
         setCodeGenerationRunning(true);
         summaryLabel.setText("Dang sinh code...");
 
         CompletableFuture.supplyAsync(() -> {
             try {
-                return aiService.generateCode(problem, codeType, language);
+                return generateCodeWithValidation(codeType, language);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -140,6 +158,169 @@ public class ResultController implements Initializable {
                 setCodeGenerationRunning(false);
             }
         }, Platform::runLater);
+    }
+
+    private CodeSubmission generateCodeWithValidation(String codeType, String language)
+            throws Exception {
+        if (!"TLE".equals(codeType)) {
+            return aiService.generateCode(problem, codeType, language);
+        }
+
+        List<TestCase> validationCases = tleValidationCases();
+        if (validationCases.isEmpty()) {
+            return aiService.generateCode(problem, codeType, language);
+        }
+
+        String lastFailure = "";
+        List<TestCase> promptCases = promptValidationCases(validationCases);
+        for (int attempt = 1; attempt <= TLE_GENERATION_ATTEMPTS; attempt++) {
+            setSummaryAsync("Dang sinh code TLE lan " + attempt + "...");
+            CodeSubmission submission = aiService.generateCode(
+                    problem,
+                    codeType,
+                    language,
+                    promptCases
+            );
+            setSummaryAsync("Dang validate code TLE lan " + attempt + "...");
+            TleValidationResult validation = validateTleSubmission(
+                    submission,
+                    language,
+                    validationCases
+            );
+            if (validation.valid()) {
+                submission.setExplanation(
+                        valueOrEmpty(submission.getExplanation())
+                                + "\n\nLocal validation: "
+                                + validation.message()
+                );
+                return submission;
+            }
+            lastFailure = validation.message();
+        }
+
+        throw new RuntimeException(
+                "AI chua tao duoc code TLE dung sau "
+                        + TLE_GENERATION_ATTEMPTS
+                        + " lan. Ly do gan nhat: "
+                        + lastFailure
+        );
+    }
+
+    private TleValidationResult validateTleSubmission(
+            CodeSubmission submission,
+            String requestedLanguage,
+            List<TestCase> validationCases
+    ) {
+        if (submission == null || submission.getCode() == null
+                || submission.getCode().isBlank()) {
+            return new TleValidationResult(false, "Code TLE rong.");
+        }
+
+        String language = valueOrEmpty(submission.getLanguage()).isBlank()
+                ? requestedLanguage
+                : submission.getLanguage();
+        List<TestCase> probes = validationCases.stream()
+                .map(this::copyForValidation)
+                .toList();
+        try {
+            executionService.runTestCases(submission.getCode(), language, probes);
+        } catch (Exception e) {
+            return new TleValidationResult(false, rootCauseMessage(e));
+        }
+
+        int accepted = 0;
+        int timedOut = 0;
+        for (TestCase probe : probes) {
+            String verdict = valueOrEmpty(probe.getVerdict());
+            if ("AC".equals(verdict)) {
+                accepted++;
+                continue;
+            }
+            if ("TLE".equals(verdict)) {
+                timedOut++;
+                continue;
+            }
+            return new TleValidationResult(
+                    false,
+                    "Case " + valueOrEmpty(probe.getId())
+                            + " ra " + (verdict.isBlank() ? "UNKNOWN" : verdict)
+                            + " thay vi AC/TLE"
+            );
+        }
+
+        return new TleValidationResult(
+                true,
+                "TLE candidate hop le tren " + probes.size()
+                        + " cases (" + accepted + " AC, " + timedOut + " TLE)."
+        );
+    }
+
+    private List<TestCase> tleValidationCases() {
+        List<TestCase> available = testCases.stream()
+                .filter(testCase -> testCase != null
+                        && testCase.getInput() != null
+                        && !testCase.getInput().isBlank()
+                        && testCase.getExpectedOutput() != null
+                        && !testCase.getExpectedOutput().isBlank())
+                .toList();
+        if (available.size() <= MAX_TLE_VALIDATION_CASES) {
+            return available;
+        }
+
+        List<TestCase> selected = new ArrayList<>();
+        List<TestCase> killer = available.stream()
+                .filter(this::isKillerCase)
+                .toList();
+        List<TestCase> nonKiller = available.stream()
+                .filter(testCase -> !isKillerCase(testCase))
+                .toList();
+
+        int nonKillerLimit = MAX_TLE_VALIDATION_CASES
+                - Math.min(MAX_TLE_VALIDATION_KILLER_CASES, killer.size());
+        for (TestCase testCase : nonKiller) {
+            if (selected.size() >= nonKillerLimit) {
+                break;
+            }
+            selected.add(testCase);
+        }
+        for (TestCase testCase : killer) {
+            if (selected.size() >= MAX_TLE_VALIDATION_CASES) {
+                break;
+            }
+            selected.add(testCase);
+        }
+        return selected;
+    }
+
+    private List<TestCase> promptValidationCases(List<TestCase> validationCases) {
+        return validationCases.stream()
+                .filter(testCase -> !isKillerCase(testCase))
+                .filter(testCase -> valueOrEmpty(testCase.getInput()).length() <= 4000)
+                .filter(testCase -> valueOrEmpty(testCase.getExpectedOutput()).length() <= 4000)
+                .limit(6)
+                .toList();
+    }
+
+    private boolean isKillerCase(TestCase testCase) {
+        String description = valueOrEmpty(testCase.getDescription()).toUpperCase();
+        return description.contains("[KILLER]") || description.contains("KILLER");
+    }
+
+    private TestCase copyForValidation(TestCase source) {
+        return new TestCase(
+                source.getId(),
+                source.getInput(),
+                source.getExpectedOutput(),
+                source.getDescription(),
+                source.isEdgeCase()
+        );
+    }
+
+    private void setSummaryAsync(String message) {
+        Platform.runLater(() -> {
+            summaryLabel.setText(message);
+            summaryLabel.setStyle("");
+        });
     }
 
     @FXML
@@ -262,6 +443,17 @@ public class ResultController implements Initializable {
         summaryLabel.setText("Da sinh " + valueOrEmpty(submission.getType())
                 + " / " + valueOrEmpty(submission.getLanguage()));
         summaryLabel.setStyle("");
+    }
+
+    private boolean canUsePreferredAc(String language) {
+        if (preferredAcSubmission == null
+                || preferredAcSubmission.getCode() == null
+                || preferredAcSubmission.getCode().isBlank()) {
+            return false;
+        }
+        String cachedLanguage = valueOrEmpty(preferredAcSubmission.getLanguage()).trim();
+        String requestedLanguage = valueOrEmpty(language).trim();
+        return cachedLanguage.equalsIgnoreCase(requestedLanguage);
     }
 
     private void updateSummary() {
@@ -442,6 +634,9 @@ public class ResultController implements Initializable {
             cursor = cursor.getCause();
         }
         return cursor.getMessage() == null ? cursor.toString() : cursor.getMessage();
+    }
+
+    private record TleValidationResult(boolean valid, String message) {
     }
 
     private String valueOrEmpty(String value) {

@@ -46,6 +46,7 @@ class CodeGenRequest(BaseModel):
     problem: ProblemSchema
     type: str = "AC"
     language: str = "cpp"
+    validation_cases: List[TestCaseSchema] = Field(default_factory=list)
 
 
 class CodeGenResponse(BaseModel):

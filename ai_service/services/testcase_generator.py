@@ -11,7 +11,7 @@ def check(input_data, expected, actual):
     return expected.strip() == actual.strip()
 """
 
-MAX_TESTCASE_INPUT_CHARS = 20000
+MAX_TESTCASE_INPUT_CHARS = 200000
 
 
 def generate_testcases(
@@ -64,9 +64,15 @@ You are an expert at generating test cases for competitive programming problems.
 Problem:
 {problem.model_dump_json(indent=2)}
 
-Generate {count} test cases{edge_case_text}.
+Generate exactly {count} unique test cases{edge_case_text}.
 Generate valid stdin inputs only. Do not compute expected outputs.
+Each test case must be a complete standalone stdin for one program run. If the
+format has a leading t/T number of test cases, make that number consistent with
+the scenarios included in that one stdin.
 {profile_guidance}
+If official samples are included, they count toward {count}; fill all remaining
+slots with newly generated, distinct inputs. Do not return fewer than {count}
+unless the input format is impossible to infer.
 
 Return ONLY valid JSON with this structure:
 {{
@@ -98,9 +104,15 @@ You are an expert at generating test cases for competitive programming problems.
 Problem:
 {problem.model_dump_json(indent=2)}
 
-Generate {count} test cases{edge_case_text}.
+Generate exactly {count} unique test cases{edge_case_text}.
 Generate valid stdin inputs only. Do not compute expected outputs.
+Each test case must be a complete standalone stdin for one program run. If the
+format has a leading t/T number of test cases, make that number consistent with
+the scenarios included in that one stdin.
 {profile_guidance}
+If official samples are included, they count toward {count}; fill all remaining
+slots with newly generated, distinct inputs. Do not return fewer than {count}
+unless the input format is impossible to infer.
 
 Return only this plain text format, repeated once per test case:
 ###CASE
@@ -230,23 +242,36 @@ def _remove_optional_output_section(value: str) -> str:
 
 def _normalize_profile(profile: str) -> str:
     value = (profile or "SMALL").strip().upper()
-    return "STRONG" if value == "STRONG" else "SMALL"
+    if value in {"MEDIUM", "STRONG", "LARGE", "KILLER"}:
+        return "KILLER" if value in {"STRONG", "LARGE", "KILLER"} else "MEDIUM"
+    return "SMALL"
 
 
 def _profile_guidance(profile: str) -> str:
-    if profile == "STRONG":
+    if profile == "KILLER":
         return """
-This is the STRONG phase. Generate adversarial but locally runnable inputs:
-- target larger-than-sample sizes and stress patterns, not maximum-only cases
-- when variables like n, m, q, t exist, prefer values from 500 to 5000 when the format allows it
-- keep each full stdin under 20000 characters so local oracle code can run it
-- include patterns that often break optimized code: repeated updates, boundary ranges,
-  all-equal data, alternating data, nested ranges, sorted/reversed data, and many queries
+This is the LARGE/KILLER performance phase. Generate adversarial inputs intended to expose TLE:
+- push the main size variables close to the statement limits when possible
+- if the real limit is enormous and raw stdin would be too large, use the largest input that fits under 200000 characters
+- prefer dense workloads: many queries, long ranges, repeated updates, all-equal data,
+  alternating data, nested ranges, sorted/reversed data, and worst-case-looking patterns
+- avoid tiny or sample-like inputs
 - do not include official sample inputs unless count is very small
 """
 
+    if profile == "MEDIUM":
+        return """
+This is the MEDIUM phase. Generate normal and edge-case inputs for logic coverage:
+- use sizes clearly bigger than samples but still easy for a trusted optimized oracle to run
+- when variables like n, m, q, t exist, prefer values from 50 to 500 when the format allows it
+- keep each full stdin under 50000 characters
+- include boundary cases, overlapping ranges, repeated values, mixed query orders,
+  alternating structures, sorted/reversed data, and multiple independent scenarios
+- avoid maximum-only stress; save that for the KILLER phase
+"""
+
     return """
-This is the SMALL stress-validation phase. Keep every input suitable for brute force:
+This is the SAMPLE/SMALL stress-validation phase. Keep every input suitable for brute force:
 - prefer tiny and small sizes over maximum constraints
 - when variables like n, m, q, t exist, keep them at most 60 unless the sample already exceeds that
 - keep each full stdin under 5000 characters

@@ -80,10 +80,17 @@ public class AIBridgeService {
 
     public CodeSubmission generateCode(Problem problem, String type,
                                        String language) throws Exception {
+        return generateCode(problem, type, language, List.of());
+    }
+
+    public CodeSubmission generateCode(Problem problem, String type,
+                                       String language,
+                                       List<TestCase> validationCases) throws Exception {
         Map<String, Object> body = new HashMap<>();
         body.put("problem", problem);
         body.put("type", type);
         body.put("language", language);
+        body.put("validation_cases", validationCases == null ? List.of() : validationCases);
 
         return HttpUtil.postJson(baseUrl + "/codegen", body, CodeSubmission.class);
     }
