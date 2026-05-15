@@ -7,6 +7,7 @@ import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
@@ -15,6 +16,7 @@ import org.example.model.CodeSubmission;
 import org.example.model.Problem;
 import org.example.model.TestCase;
 import org.example.service.AIBridgeService;
+import org.example.service.ExecutionService;
 import org.example.ui.util.AlertUtil;
 
 import java.net.URL;
@@ -35,8 +37,11 @@ public class ResultController implements Initializable {
     @FXML private TextArea explanationArea;
 
     private final ObservableList<TestCase> testCases = FXCollections.observableArrayList();
+    private final ExecutionService executionService = new ExecutionService();
     private AIBridgeService aiService = new AIBridgeService();
     private Problem problem;
+    private Runnable resultUpdateListener = () -> {
+    };
 
     @Override
     public void initialize(URL url, ResourceBundle resourceBundle) {
@@ -50,6 +55,8 @@ public class ResultController implements Initializable {
         rVerdictCol.setCellValueFactory(new PropertyValueFactory<>("verdict"));
         rTimeCol.setCellValueFactory(new PropertyValueFactory<>("executionTimeMs"));
         rDiffCol.setCellValueFactory(new PropertyValueFactory<>("actualOutput"));
+        rVerdictCol.setCellFactory(column -> verdictCell());
+        rDiffCol.setCellFactory(column -> singleLineCell());
     }
 
     public void setAiService(AIBridgeService aiService) {
@@ -65,6 +72,12 @@ public class ResultController implements Initializable {
     public void setTestCases(List<TestCase> values) {
         testCases.setAll(values == null ? List.of() : values);
         summaryLabel.setText(testCases.isEmpty() ? "-" : testCases.size() + " test cases");
+        summaryLabel.setStyle("");
+    }
+
+    public void setResultUpdateListener(Runnable resultUpdateListener) {
+        this.resultUpdateListener = resultUpdateListener == null ? () -> {
+        } : resultUpdateListener;
     }
 
     @FXML
@@ -97,8 +110,44 @@ public class ResultController implements Initializable {
 
     @FXML
     private void onRunAllTests() {
-        AlertUtil.showInfo(codeArea.getScene().getWindow(),
-                "Execution engine se duoc trien khai o Task 05.");
+        String code = codeArea.getText();
+        String language = languageCombo.getValue();
+        if (code == null || code.isBlank()) {
+            AlertUtil.showWarning(codeArea.getScene().getWindow(), "Hay nhap hoac sinh source code truoc.");
+            return;
+        }
+        if (testCases.isEmpty()) {
+            AlertUtil.showWarning(codeArea.getScene().getWindow(), "Chua co test case de chay.");
+            return;
+        }
+
+        summaryLabel.setText("Dang chay...");
+        summaryLabel.setStyle("");
+        testCases.forEach(testCase -> {
+            testCase.setVerdict("");
+            testCase.setActualOutput("");
+            testCase.setExecutionTimeMs(0);
+        });
+        resultTable.refresh();
+        resultUpdateListener.run();
+
+        List<TestCase> snapshot = List.copyOf(testCases);
+        CompletableFuture.runAsync(() -> {
+            for (TestCase testCase : snapshot) {
+                try {
+                    executionService.runTestCase(code, language, testCase);
+                } catch (Exception e) {
+                    testCase.setVerdict("RE");
+                    testCase.setActualOutput(rootCauseMessage(e));
+                    testCase.setExecutionTimeMs(0);
+                }
+                Platform.runLater(() -> {
+                    resultTable.refresh();
+                    updateSummary();
+                    resultUpdateListener.run();
+                });
+            }
+        });
     }
 
     @FXML
@@ -115,6 +164,55 @@ public class ResultController implements Initializable {
         explanationArea.setText(valueOrEmpty(submission.getExplanation()));
         summaryLabel.setText("Da sinh " + valueOrEmpty(submission.getType())
                 + " / " + valueOrEmpty(submission.getLanguage()));
+        summaryLabel.setStyle("");
+    }
+
+    private void updateSummary() {
+        long total = testCases.size();
+        long accepted = testCases.stream()
+                .filter(testCase -> "AC".equals(testCase.getVerdict()))
+                .count();
+        long finished = testCases.stream()
+                .filter(testCase -> testCase.getVerdict() != null && !testCase.getVerdict().isBlank())
+                .count();
+
+        summaryLabel.setText(accepted + "/" + total + " AC (" + finished + " done)");
+        summaryLabel.setStyle(accepted == total && finished == total
+                ? "-fx-text-fill: #7bd88f; -fx-font-weight: bold;"
+                : "-fx-text-fill: #e38284; -fx-font-weight: bold;");
+    }
+
+    private TableCell<TestCase, String> verdictCell() {
+        return new TableCell<>() {
+            @Override
+            protected void updateItem(String verdict, boolean empty) {
+                super.updateItem(verdict, empty);
+                if (empty || verdict == null || verdict.isBlank()) {
+                    setText("");
+                    setStyle("");
+                    return;
+                }
+                setText(verdict);
+                setStyle(switch (verdict) {
+                    case "AC" -> "-fx-text-fill: #7bd88f; -fx-font-weight: bold;";
+                    case "WA" -> "-fx-text-fill: #e38284; -fx-font-weight: bold;";
+                    case "TLE" -> "-fx-text-fill: #e5b567; -fx-font-weight: bold;";
+                    case "CE" -> "-fx-text-fill: #a88bd8; -fx-font-weight: bold;";
+                    case "RE" -> "-fx-text-fill: #d18f52; -fx-font-weight: bold;";
+                    default -> "-fx-text-fill: #c7c2b8;";
+                });
+            }
+        };
+    }
+
+    private TableCell<TestCase, String> singleLineCell() {
+        return new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? "" : item.replace('\n', ' '));
+            }
+        };
     }
 
     private String rootCauseMessage(Throwable error) {

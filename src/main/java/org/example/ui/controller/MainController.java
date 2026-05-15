@@ -57,6 +57,7 @@ public class MainController implements Initializable {
         setupToggleListeners();
         updateInputMode(imageModeBtn.isSelected());
         resultViewController.setAiService(aiService);
+        resultViewController.setResultUpdateListener(testcaseViewController::refreshTable);
         checkServiceAsync();
     }
 

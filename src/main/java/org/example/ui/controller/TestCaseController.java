@@ -62,6 +62,11 @@ public class TestCaseController implements Initializable {
         return List.copyOf(testCases);
     }
 
+    public void refreshTable() {
+        testCaseTable.refresh();
+        displayDetails(testCaseTable.getSelectionModel().getSelectedItem());
+    }
+
     @FXML
     private void onAddManual() {
         Dialog<TestCase> dialog = new Dialog<>();
@@ -174,6 +179,7 @@ public class TestCaseController implements Initializable {
         });
         verdictCol.setCellValueFactory(cellData ->
                 new ReadOnlyStringWrapper(valueOrEmpty(cellData.getValue().getVerdict())));
+        verdictCol.setCellFactory(column -> verdictCell());
     }
 
     private void setupSelectionDetails() {
@@ -201,6 +207,29 @@ public class TestCaseController implements Initializable {
             protected void updateItem(String item, boolean empty) {
                 super.updateItem(item, empty);
                 setText(empty ? "" : valueOrEmpty(item).replace('\n', ' '));
+            }
+        };
+    }
+
+    private TableCell<TestCase, String> verdictCell() {
+        return new TableCell<>() {
+            @Override
+            protected void updateItem(String verdict, boolean empty) {
+                super.updateItem(verdict, empty);
+                if (empty || verdict == null || verdict.isBlank()) {
+                    setText("");
+                    setStyle("");
+                    return;
+                }
+                setText(verdict);
+                setStyle(switch (verdict) {
+                    case "AC" -> "-fx-text-fill: #7bd88f; -fx-font-weight: bold;";
+                    case "WA" -> "-fx-text-fill: #e38284; -fx-font-weight: bold;";
+                    case "TLE" -> "-fx-text-fill: #e5b567; -fx-font-weight: bold;";
+                    case "CE" -> "-fx-text-fill: #a88bd8; -fx-font-weight: bold;";
+                    case "RE" -> "-fx-text-fill: #d18f52; -fx-font-weight: bold;";
+                    default -> "-fx-text-fill: #c7c2b8;";
+                });
             }
         };
     }
