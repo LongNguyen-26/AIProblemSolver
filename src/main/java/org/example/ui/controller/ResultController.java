@@ -56,6 +56,7 @@ public class ResultController implements Initializable {
     private Problem problem;
     private boolean codeGenerationInProgress;
     private boolean testRunInProgress;
+    private boolean externalBusy;
     private Runnable resultUpdateListener = () -> {
     };
 
@@ -98,6 +99,11 @@ public class ResultController implements Initializable {
     public void setResultUpdateListener(Runnable resultUpdateListener) {
         this.resultUpdateListener = resultUpdateListener == null ? () -> {
         } : resultUpdateListener;
+    }
+
+    public void setExternalBusy(boolean busy) {
+        externalBusy = busy;
+        updateActionButtons();
     }
 
     @FXML
@@ -197,17 +203,22 @@ public class ResultController implements Initializable {
 
     private void setCodeGenerationRunning(boolean running) {
         codeGenerationInProgress = running;
-        if (generateCodeBtn != null) {
-            generateCodeBtn.setDisable(running);
-            generateCodeBtn.setText(running ? "Dang sinh..." : "Sinh code");
-        }
+        updateActionButtons();
     }
 
     private void setTestRunRunning(boolean running) {
         testRunInProgress = running;
+        updateActionButtons();
+    }
+
+    private void updateActionButtons() {
+        if (generateCodeBtn != null) {
+            generateCodeBtn.setDisable(externalBusy || codeGenerationInProgress);
+            generateCodeBtn.setText(codeGenerationInProgress ? "Dang sinh..." : "Sinh code");
+        }
         if (runAllTestsBtn != null) {
-            runAllTestsBtn.setDisable(running);
-            runAllTestsBtn.setText(running ? "Dang chay..." : "Chay tat ca test");
+            runAllTestsBtn.setDisable(externalBusy || testRunInProgress);
+            runAllTestsBtn.setText(testRunInProgress ? "Dang chay..." : "Chay tat ca test");
         }
     }
 

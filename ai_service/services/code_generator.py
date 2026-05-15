@@ -3,7 +3,24 @@ from services.groq_json import request_json, request_text
 
 
 TYPE_INSTRUCTIONS = {
-    "AC": "Write a CORRECT, optimal solution. It must pass all test cases.",
+    "AC": (
+        "Write a CORRECT, optimal solution. It must pass all test cases. "
+        "Do not use heuristics, probabilistic assumptions, or arguments like "
+        "'rare in practice'. Handle adversarial inputs within the stated constraints."
+    ),
+    "ORACLE": (
+        "Write a complete, correct reference solution used only to compute expected "
+        "outputs for validation-sized generated tests. Prioritize exact problem "
+        "semantics, simplicity, and debuggability over asymptotic optimality. If the "
+        "official constraints are huge but the input is small, use a straightforward "
+        "simulation or brute-force approach when that is less error-prone."
+    ),
+    "ORACLE_ALT": (
+        "Write a complete, correct reference solution used only to cross-check another "
+        "oracle on validation-sized generated tests. Use an independent implementation "
+        "style or algorithmic approach from the obvious primary solution. Prioritize "
+        "exact problem semantics and clarity over speed."
+    ),
     "WA": (
         "Write a solution with a subtle bug that gives WRONG ANSWER on some "
         "cases. The bug should not be obvious."
@@ -26,6 +43,10 @@ Problem:
 {problem.model_dump_json(indent=2)}
 
 Language: {language}
+
+Before returning, verify mentally that the source follows the input format exactly,
+prints only the required output, and matches all sample inputs/outputs embedded in
+the problem statement. Return a full compilable program, not pseudocode.
 
 Return ONLY valid JSON:
 {{

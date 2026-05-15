@@ -11,6 +11,8 @@ def check(input_data, expected, actual):
     return expected.strip() == actual.strip()
 """
 
+MAX_TESTCASE_INPUT_CHARS = 20000
+
 
 def generate_testcases(
     problem: ProblemSchema, count: int, include_edge_cases: bool
@@ -58,21 +60,27 @@ Problem:
 {problem.model_dump_json(indent=2)}
 
 Generate {count} test cases{edge_case_text}.
-Compute the exact expected output for every test case.
+Generate valid stdin inputs only. Do not compute expected outputs.
+Keep every generated input validation-friendly for a local reference solution:
+- prefer small and medium sizes over maximum constraints
+- when variables like n, m, q, t exist, keep them at most 200 unless the sample already exceeds that
+- keep each full stdin under 5000 characters when possible
+- include official sample inputs first when they are present and count allows
+- still cover edge patterns such as minimum size, boundaries, repeated values, overlapping updates, and mixed query order
 
 Return ONLY valid JSON with this structure:
 {{
   "testcases": [
     {{
       "input_lines": ["..."],
-      "expected_output_lines": ["..."],
       "description": "...",
       "is_edge_case": false
     }}
   ]
 }}
 Do not include checker code.
-Do not put newline characters inside JSON string values. Use input_lines and expected_output_lines arrays instead.
+Do not include expected outputs.
+Do not put newline characters inside JSON string values. Use input_lines arrays instead.
 """
 
     data = request_json([{"role": "user", "content": prompt}])
@@ -90,7 +98,13 @@ Problem:
 {problem.model_dump_json(indent=2)}
 
 Generate {count} test cases{edge_case_text}.
-Compute the exact expected output for every test case.
+Generate valid stdin inputs only. Do not compute expected outputs.
+Keep every generated input validation-friendly for a local reference solution:
+- prefer small and medium sizes over maximum constraints
+- when variables like n, m, q, t exist, keep them at most 200 unless the sample already exceeds that
+- keep each full stdin under 5000 characters when possible
+- include official sample inputs first when they are present and count allows
+- still cover edge patterns such as minimum size, boundaries, repeated values, overlapping updates, and mixed query order
 
 Return only this plain text format, repeated once per test case:
 ###CASE
@@ -98,8 +112,6 @@ EDGE: true
 DESC: short description
 INPUT:
 full stdin here
-OUTPUT:
-full expected stdout here
 ###END
 
 Do not use JSON. Do not use markdown fences.
@@ -122,17 +134,14 @@ def _normalize_testcases(raw_cases: list[Any], count: int) -> list[TestCaseSchem
             continue
 
         input_text = _multiline_value(raw, "input", "input_lines", "stdin")
-        expected_output = _multiline_value(
-            raw, "expected_output", "expected_output_lines", "output", "stdout"
-        )
-        if not input_text.strip():
+        if not _is_usable_input(input_text):
             continue
 
         testcases.append(
             TestCaseSchema(
                 id=_new_id(),
                 input=input_text.strip(),
-                expected_output=expected_output.strip(),
+                expected_output="",
                 description=_string_value(raw.get("description") or raw.get("desc")),
                 is_edge_case=_bool_value(
                     raw.get("is_edge_case", raw.get("edgeCase", raw.get("edge")))
@@ -159,30 +168,24 @@ def _parse_text_cases(content: str, count: int) -> list[TestCaseSchema]:
     blocks = re.findall(r"###CASE\s*(.*?)###END", content, flags=re.DOTALL | re.IGNORECASE)
     for block in blocks:
         input_match = re.search(
-            r"INPUT:\s*\n(.*?)\nOUTPUT:\s*\n",
+            r"INPUT:\s*\n(.*)",
             block,
             flags=re.DOTALL | re.IGNORECASE,
         )
-        output_match = re.search(
-            r"OUTPUT:\s*\n(.*)",
-            block,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        if not input_match or not output_match:
+        if not input_match:
             continue
 
         desc_match = re.search(r"^DESC:\s*(.*)$", block, flags=re.MULTILINE | re.IGNORECASE)
         edge_match = re.search(r"^EDGE:\s*(.*)$", block, flags=re.MULTILINE | re.IGNORECASE)
-        input_text = input_match.group(1).strip()
-        expected_output = output_match.group(1).strip()
-        if not input_text:
+        input_text = _remove_optional_output_section(input_match.group(1)).strip()
+        if not _is_usable_input(input_text):
             continue
 
         testcases.append(
             TestCaseSchema(
                 id=_new_id(),
                 input=input_text,
-                expected_output=expected_output,
+                expected_output="",
                 description=desc_match.group(1).strip() if desc_match else "",
                 is_edge_case=_bool_value(edge_match.group(1) if edge_match else False),
             )
@@ -196,16 +199,14 @@ def _sample_fallback_testcases(
     problem: ProblemSchema, count: int
 ) -> list[TestCaseSchema]:
     testcases: list[TestCaseSchema] = []
-    sample_outputs = problem.sample_outputs or []
     for index, sample_input in enumerate(problem.sample_inputs or []):
-        if not sample_input.strip():
+        if not _is_usable_input(sample_input):
             continue
-        expected_output = sample_outputs[index] if index < len(sample_outputs) else ""
         testcases.append(
             TestCaseSchema(
                 id=_new_id(),
                 input=sample_input.strip(),
-                expected_output=expected_output.strip(),
+                expected_output="",
                 description=f"Sample test case {index + 1}",
                 is_edge_case=False,
             )
@@ -225,6 +226,14 @@ def _sample_fallback_testcases(
             is_edge_case=True,
         )
     ]
+
+
+def _remove_optional_output_section(value: str) -> str:
+    return re.split(r"\nOUTPUT:\s*\n", value, maxsplit=1, flags=re.IGNORECASE)[0]
+
+
+def _is_usable_input(value: str) -> bool:
+    return bool(value and value.strip() and len(value) <= MAX_TESTCASE_INPUT_CHARS)
 
 
 def _string_value(value: Any) -> str:

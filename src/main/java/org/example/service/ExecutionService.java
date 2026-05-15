@@ -64,6 +64,71 @@ public class ExecutionService {
         }
     }
 
+    public void populateExpectedOutputs(String sourceCode, String language,
+                                        List<TestCase> testCases) throws Exception {
+        if (testCases == null || testCases.isEmpty()) {
+            return;
+        }
+
+        List<String> outputs = generateOutputs(
+                sourceCode,
+                language,
+                testCases.stream().map(TestCase::getInput).toList(),
+                "Generated AC code"
+        );
+        for (int i = 0; i < testCases.size(); i++) {
+            TestCase testCase = testCases.get(i);
+            if (testCase == null) {
+                continue;
+            }
+            testCase.setExpectedOutput(outputs.get(i));
+            testCase.setActualOutput("");
+            testCase.setVerdict("");
+            testCase.setExecutionTimeMs(0);
+        }
+    }
+
+    public List<String> generateOutputs(String sourceCode, String language,
+                                        List<String> inputs, String sourceLabel)
+            throws Exception {
+        if (sourceCode == null || sourceCode.isBlank()) {
+            throw new IllegalArgumentException(sourceLabel + " source code must not be blank");
+        }
+        if (inputs == null || inputs.isEmpty()) {
+            return List.of();
+        }
+
+        FileUtil.ensureDir(SANDBOX_PATH.toString());
+        String normalizedLanguage = normalizeLanguage(language);
+        Path sourceFile = writeSourceFile(sourceCode, normalizedLanguage);
+
+        CompileResult compileResult = compile(normalizedLanguage, sourceFile);
+        if (!compileResult.success()) {
+            throw new IllegalStateException(
+                    sourceLabel + " failed to compile: "
+                            + nonBlank(compileResult.stderr(), compileResult.stdout())
+            );
+        }
+
+        List<String> outputs = new ArrayList<>();
+        for (int i = 0; i < inputs.size(); i++) {
+            RunResult runResult = run(normalizedLanguage, inputs.get(i));
+            if (runResult.timedOut()) {
+                throw new IllegalStateException(
+                        sourceLabel + " timed out on input #" + (i + 1)
+                );
+            }
+            if (runResult.exitCode() != 0) {
+                throw new IllegalStateException(
+                        sourceLabel + " failed on input #" + (i + 1) + ": "
+                                + nonBlank(runResult.stderr(), runResult.stdout())
+                );
+            }
+            outputs.add(normalizeOutput(runResult.stdout()));
+        }
+        return outputs;
+    }
+
     private Path writeSourceFile(String code, String language) throws IOException {
         String filename = switch (language) {
             case "cpp" -> "Main.cpp";
@@ -178,11 +243,11 @@ public class ExecutionService {
         }
     }
 
-    private boolean outputMatches(String expected, String actual) {
+    public boolean outputMatches(String expected, String actual) {
         return normalizeOutput(expected).equals(normalizeOutput(actual));
     }
 
-    private String normalizeOutput(String value) {
+    public String normalizeOutput(String value) {
         if (value == null) {
             return "";
         }
