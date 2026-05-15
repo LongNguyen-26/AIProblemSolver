@@ -90,6 +90,74 @@
     -fx-background-color: #e38284;
 }
 
+.app-dialog {
+    -fx-background-color: #202224;
+    -fx-border-color: #34383c;
+    -fx-border-width: 1;
+}
+
+.app-dialog > .content {
+    -fx-background-color: #202224;
+    -fx-padding: 18 20 12 20;
+}
+
+.app-dialog > .button-bar > .container {
+    -fx-background-color: #202224;
+    -fx-padding: 6 20 18 20;
+}
+
+.dialog-content {
+    -fx-alignment: center-left;
+    -fx-min-width: 470;
+}
+
+.dialog-icon {
+    -fx-alignment: center;
+    -fx-min-width: 46;
+    -fx-min-height: 46;
+    -fx-max-width: 46;
+    -fx-max-height: 46;
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+    -fx-border-width: 1.5;
+    -fx-font-size: 23px;
+    -fx-font-weight: 700;
+}
+
+.dialog-title {
+    -fx-text-fill: #f4f1eb;
+    -fx-font-size: 15px;
+    -fx-font-weight: 700;
+}
+
+.dialog-message {
+    -fx-text-fill: #cfd7d3;
+    -fx-font-size: 13px;
+    -fx-line-spacing: 2;
+}
+
+.dialog-info .dialog-icon {
+    -fx-background-color: #173d3b;
+    -fx-border-color: #6ec7b8;
+    -fx-text-fill: #b8fff0;
+}
+
+.dialog-warning .dialog-icon {
+    -fx-background-color: #4b3920;
+    -fx-border-color: #e5b567;
+    -fx-text-fill: #ffe0a3;
+}
+
+.dialog-error .dialog-icon {
+    -fx-background-color: #4a2528;
+    -fx-border-color: #d76f72;
+    -fx-text-fill: #ffc5c7;
+}
+
+.dialog-action {
+    -fx-min-width: 92;
+}
+
 .status-online {
     -fx-text-fill: #7bd88f;
     -fx-font-weight: 700;
@@ -115,6 +183,14 @@
     -fx-border-color: #34383c;
     -fx-border-radius: 6;
     -fx-background-radius: 6;
+    -fx-control-inner-background: #151719;
+}
+
+.text-input {
+    -fx-text-fill: #f4f1eb;
+    -fx-highlight-fill: #315c57;
+    -fx-highlight-text-fill: #ffffff;
+    -fx-prompt-text-fill: #8e989d;
 }
 
 .text-area .content,
@@ -125,9 +201,62 @@
     -fx-text-fill: #f4f1eb;
 }
 
-.text-area,
-.text-field {
-    -fx-prompt-text-fill: #8e908c;
+.text-area {
+    -fx-text-fill: #f4f1eb;
+}
+
+.text-area .text {
+    -fx-fill: #f4f1eb;
+}
+
+.text-area:readonly .content,
+.text-area:readonly {
+    -fx-background-color: #151719;
+}
+
+.text-area:readonly .text {
+    -fx-fill: #dfe6e2;
+}
+
+.text-area:focused,
+.text-field:focused,
+.list-view:focused,
+.table-view:focused,
+.spinner:focused {
+    -fx-border-color: #6ec7b8;
+}
+
+.list-view {
+    -fx-padding: 1;
+}
+
+.list-view .virtual-flow,
+.list-view .viewport {
+    -fx-background-color: #151719;
+}
+
+.list-cell {
+    -fx-background-color: #151719;
+    -fx-text-fill: #e9e4da;
+    -fx-padding: 7 10 7 10;
+}
+
+.list-cell:odd {
+    -fx-background-color: #1a1d20;
+}
+
+.list-cell:filled:hover {
+    -fx-background-color: #242b2d;
+}
+
+.list-cell:filled:selected,
+.list-cell:filled:selected:focused {
+    -fx-background-color: #315c57;
+    -fx-text-fill: #ffffff;
+}
+
+.list-cell:empty {
+    -fx-background-color: #151719;
 }
 
 .code-editor {
