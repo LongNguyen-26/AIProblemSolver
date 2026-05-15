@@ -1,7 +1,63 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<?import javafx.scene.layout.BorderPane?>
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.TextArea?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.ColumnConstraints?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.VBox?>
 
-<BorderPane xmlns="http://javafx.com/javafx/17.0.6"
-            xmlns:fx="http://javafx.com/fxml/1"
-            fx:controller="org.example.ui.controller.ProblemInputController" />
+<VBox xmlns="http://javafx.com/javafx/17.0.6"
+      xmlns:fx="http://javafx.com/fxml/1"
+      fx:controller="org.example.ui.controller.ProblemInputController"
+      spacing="10.0"
+      styleClass="tab-content">
+    <padding>
+        <Insets top="15.0" right="15.0" bottom="15.0" left="15.0"/>
+    </padding>
+
+    <Label text="Ket qua phan tich" styleClass="section-title"/>
+
+    <GridPane hgap="10.0" vgap="8.0">
+        <columnConstraints>
+            <ColumnConstraints minWidth="110.0" prefWidth="120.0"/>
+            <ColumnConstraints hgrow="ALWAYS"/>
+        </columnConstraints>
+
+        <Label text="Tieu de:" GridPane.columnIndex="0" GridPane.rowIndex="0"/>
+        <TextField fx:id="titleField"
+                   editable="false"
+                   GridPane.columnIndex="1"
+                   GridPane.hgrow="ALWAYS"
+                   GridPane.rowIndex="0"/>
+
+        <Label text="Input format:" GridPane.columnIndex="0" GridPane.rowIndex="1"/>
+        <TextArea fx:id="inputFormatArea"
+                  editable="false"
+                  prefRowCount="2"
+                  wrapText="true"
+                  GridPane.columnIndex="1"
+                  GridPane.hgrow="ALWAYS"
+                  GridPane.rowIndex="1"/>
+
+        <Label text="Output format:" GridPane.columnIndex="0" GridPane.rowIndex="2"/>
+        <TextArea fx:id="outputFormatArea"
+                  editable="false"
+                  prefRowCount="2"
+                  wrapText="true"
+                  GridPane.columnIndex="1"
+                  GridPane.hgrow="ALWAYS"
+                  GridPane.rowIndex="2"/>
+    </GridPane>
+
+    <Label text="Constraints:" styleClass="field-label"/>
+    <ListView fx:id="constraintsList" prefHeight="110.0"/>
+
+    <Label text="Mo ta bai toan:" styleClass="field-label"/>
+    <TextArea fx:id="descriptionArea"
+              editable="false"
+              wrapText="true"
+              VBox.vgrow="ALWAYS"/>
+</VBox>
