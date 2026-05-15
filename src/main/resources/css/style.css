@@ -61,6 +61,11 @@
     -fx-cursor: hand;
 }
 
+.button:disabled {
+    -fx-opacity: 0.72;
+    -fx-cursor: default;
+}
+
 .btn-primary {
     -fx-background-color: #6ec7b8;
     -fx-text-fill: #101314;
@@ -69,6 +74,11 @@
 
 .btn-primary:hover {
     -fx-background-color: #83d7ca;
+}
+
+.btn-primary:disabled {
+    -fx-background-color: #3f8178;
+    -fx-text-fill: #dbeeea;
 }
 
 .btn-secondary {

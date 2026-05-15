@@ -3,6 +3,7 @@ package org.example.ui.controller;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
+import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
@@ -40,6 +41,7 @@ public class MainController implements Initializable {
     @FXML private Spinner<Integer> testCaseCountSpinner;
     @FXML private CheckBox edgeCasesCheck;
     @FXML private TabPane mainTabPane;
+    @FXML private Button analyzeBtn;
 
     @FXML private ProblemInputController problemInputViewController;
     @FXML private TestCaseController testcaseViewController;
@@ -48,6 +50,7 @@ public class MainController implements Initializable {
     private final AIBridgeService aiService = new AIBridgeService();
     private Problem currentProblem;
     private String selectedImageBase64;
+    private boolean analyzeInProgress;
 
     @Override
     public void initialize(URL url, ResourceBundle resourceBundle) {
@@ -119,6 +122,10 @@ public class MainController implements Initializable {
 
     @FXML
     private void onAnalyze() {
+        if (analyzeInProgress) {
+            return;
+        }
+
         boolean imageMode = imageModeBtn.isSelected();
         String text = problemTextArea.getText();
         String imageBase64 = selectedImageBase64;
@@ -134,29 +141,38 @@ public class MainController implements Initializable {
             return;
         }
 
-        setLoading(true);
+        setAnalyzeRunning(true);
         setStatus("Dang phan tich de bai...");
 
         CompletableFuture.supplyAsync(() -> analyzeAndGenerate(
                         imageMode, text, imageBase64, testCaseCount, includeEdgeCases
                 ))
-                .thenAcceptAsync(result -> {
-                    currentProblem = result.problem;
-                    problemInputViewController.displayProblem(result.problem);
-                    testcaseViewController.setTestCases(result.testCases);
-                    resultViewController.setProblem(result.problem);
-                    resultViewController.setTestCases(result.testCases);
-                    mainTabPane.getSelectionModel().select(1);
-                    setStatus("Phan tich xong - " + result.testCases.size() + " test cases da tao");
-                    setLoading(false);
-                }, Platform::runLater)
-                .exceptionally(error -> {
-                    Platform.runLater(() -> {
-                        showError(rootCauseMessage(error));
-                        setLoading(false);
-                    });
-                    return null;
-                });
+                .whenCompleteAsync((result, error) -> {
+                    try {
+                        if (error != null) {
+                            showError(rootCauseMessage(error));
+                            return;
+                        }
+                        currentProblem = result.problem;
+                        problemInputViewController.displayProblem(result.problem);
+                        testcaseViewController.setTestCases(result.testCases);
+                        resultViewController.setProblem(result.problem);
+                        resultViewController.setTestCases(result.testCases);
+                        mainTabPane.getSelectionModel().select(1);
+                        setStatus("Phan tich xong - " + result.testCases.size() + " test cases da tao");
+                    } finally {
+                        setAnalyzeRunning(false);
+                    }
+                }, Platform::runLater);
+    }
+
+    private void setAnalyzeRunning(boolean running) {
+        analyzeInProgress = running;
+        setLoading(running);
+        if (analyzeBtn != null) {
+            analyzeBtn.setDisable(running);
+            analyzeBtn.setText(running ? "Dang phan tich..." : "Phan tich de");
+        }
     }
 
     private AnalyzeResult analyzeAndGenerate(boolean imageMode, String text, String imageBase64,

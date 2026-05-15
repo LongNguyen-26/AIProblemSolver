@@ -6,39 +6,24 @@ int main(){
     cin.tie(nullptr);
     int T; if(!(cin>>T)) return 0;
     while(T--){
-        int n,k;cin>>n>>k;
-        int z=n-k;
-        if(k==0){
-            cout<<string(n,'0')<<"\n";
+        int n;cin>>n;
+        vector<vector<int>> a(n, vector<int>(n));
+        for(int i=0;i<n;i++) for(int j=0;j<n;j++) cin>>a[i][j];
+        // find a row with at least one edge
+        int row=-1;
+        for(int i=0;i<n;i++){
+            for(int j=0;j<n;j++) if(a[i][j]){ row=i; break; }
+            if(row!=-1) break;
+        }
+        if(row==-1){ // should not happen as perfect matching exists
+            cout<<-1<<"\n";
             continue;
         }
-        if(k==n){
-            cout<<string(n,'1')<<"\n";
-            continue;
-        }
-        long long bestVal=LLONG_MAX; int bestR=1;
-        for(int r=1;r<=k;r++){
-            int zeroRuns=r+1;
-            int L0 = (z + zeroRuns -1)/zeroRuns; // ceil
-            int S1 = k / r; // floor
-            long long val = 1LL*L0*(n+1) - S1;
-            if(val<bestVal){bestVal=val;bestR=r;}
-        }
-        int r=bestR; // number of one-runs
-        int zeroRuns=r+1;
-        int baseZero = z/zeroRuns; int extraZero = z%zeroRuns;
-        int baseOne = k/r; int extraOne = k%r;
-        string ans; ans.reserve(n);
-        for(int i=0;i<zeroRuns;i++){
-            int lenZero = baseZero + (i<extraZero);
-            ans.append(lenZero,'0');
-            if(i<r){
-                int lenOne = baseOne + (i<extraOne);
-                ans.append(lenOne,'1');
-            }
-        }
-        // ans length should be n
-        cout<<ans<<"\n";
+        vector<pair<int,int>> ops;
+        for(int j=0;j<n;j++) if(a[row][j]) ops.emplace_back(row,j);
+        // ops size <= n <= 50
+        cout<<ops.size()<<"\n";
+        for(auto &p:ops) cout<<p.first<<' '<<p.second<<"\n";
     }
     return 0;
 }

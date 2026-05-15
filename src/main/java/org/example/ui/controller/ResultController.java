@@ -6,6 +6,7 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
+import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.OverrunStyle;
@@ -45,12 +46,16 @@ public class ResultController implements Initializable {
     @FXML private TableColumn<TestCase, Long> rTimeCol;
     @FXML private TableColumn<TestCase, String> rDiffCol;
     @FXML private TextArea explanationArea;
+    @FXML private Button generateCodeBtn;
+    @FXML private Button runAllTestsBtn;
 
     private final ObservableList<TestCase> testCases = FXCollections.observableArrayList();
     private final ExecutionService executionService = new ExecutionService();
     private final ReportService reportService = new ReportService();
     private AIBridgeService aiService = new AIBridgeService();
     private Problem problem;
+    private boolean codeGenerationInProgress;
+    private boolean testRunInProgress;
     private Runnable resultUpdateListener = () -> {
     };
 
@@ -97,6 +102,9 @@ public class ResultController implements Initializable {
 
     @FXML
     private void onGenerateCode() {
+        if (codeGenerationInProgress) {
+            return;
+        }
         if (problem == null) {
             AlertUtil.showWarning(codeArea.getScene().getWindow(), "Hay phan tich de bai truoc.");
             return;
@@ -104,6 +112,7 @@ public class ResultController implements Initializable {
 
         String codeType = codeTypeCombo.getValue();
         String language = languageCombo.getValue();
+        setCodeGenerationRunning(true);
         summaryLabel.setText("Dang sinh code...");
 
         CompletableFuture.supplyAsync(() -> {
@@ -112,19 +121,26 @@ public class ResultController implements Initializable {
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
-        }).thenAcceptAsync(this::displaySubmission, Platform::runLater)
-                .exceptionally(error -> {
-                    Platform.runLater(() -> {
-                        String message = rootCauseMessage(error);
-                        summaryLabel.setText("Loi sinh code");
-                        AlertUtil.showError(codeArea.getScene().getWindow(), message);
-                    });
-                    return null;
-                });
+        }).whenCompleteAsync((submission, error) -> {
+            try {
+                if (error != null) {
+                    String message = rootCauseMessage(error);
+                    summaryLabel.setText("Loi sinh code");
+                    AlertUtil.showError(codeArea.getScene().getWindow(), message);
+                    return;
+                }
+                displaySubmission(submission);
+            } finally {
+                setCodeGenerationRunning(false);
+            }
+        }, Platform::runLater);
     }
 
     @FXML
     private void onRunAllTests() {
+        if (testRunInProgress) {
+            return;
+        }
         String code = codeArea.getText();
         String language = languageCombo.getValue();
         if (code == null || code.isBlank()) {
@@ -136,6 +152,7 @@ public class ResultController implements Initializable {
             return;
         }
 
+        setTestRunRunning(true);
         summaryLabel.setText("Dang chay...");
         summaryLabel.setStyle("");
         testCases.forEach(testCase -> {
@@ -162,7 +179,36 @@ public class ResultController implements Initializable {
                     resultUpdateListener.run();
                 });
             }
-        });
+        }).whenCompleteAsync((ignored, error) -> {
+            try {
+                if (error != null) {
+                    summaryLabel.setText("Loi chay test");
+                    AlertUtil.showError(codeArea.getScene().getWindow(), rootCauseMessage(error));
+                } else {
+                    resultTable.refresh();
+                    updateSummary();
+                    resultUpdateListener.run();
+                }
+            } finally {
+                setTestRunRunning(false);
+            }
+        }, Platform::runLater);
+    }
+
+    private void setCodeGenerationRunning(boolean running) {
+        codeGenerationInProgress = running;
+        if (generateCodeBtn != null) {
+            generateCodeBtn.setDisable(running);
+            generateCodeBtn.setText(running ? "Dang sinh..." : "Sinh code");
+        }
+    }
+
+    private void setTestRunRunning(boolean running) {
+        testRunInProgress = running;
+        if (runAllTestsBtn != null) {
+            runAllTestsBtn.setDisable(running);
+            runAllTestsBtn.setText(running ? "Dang chay..." : "Chay tat ca test");
+        }
     }
 
     @FXML

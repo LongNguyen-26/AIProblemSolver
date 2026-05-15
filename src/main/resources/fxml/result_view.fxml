@@ -26,7 +26,8 @@
             <HBox spacing="10.0">
                 <ComboBox fx:id="codeTypeCombo" prefWidth="125.0" promptText="Loai code"/>
                 <ComboBox fx:id="languageCombo" prefWidth="125.0" promptText="Ngon ngu"/>
-                <Button text="Sinh code"
+                <Button fx:id="generateCodeBtn"
+                        text="Sinh code"
                         onAction="#onGenerateCode"
                         styleClass="btn-primary"/>
             </HBox>
@@ -41,7 +42,8 @@
                       wrapText="false"
                       VBox.vgrow="ALWAYS"/>
             <HBox spacing="10.0">
-                <Button text="Chay tat ca test"
+                <Button fx:id="runAllTestsBtn"
+                        text="Chay tat ca test"
                         onAction="#onRunAllTests"
                         maxWidth="Infinity"
                         styleClass="btn-primary"

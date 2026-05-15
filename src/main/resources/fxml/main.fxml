@@ -87,7 +87,8 @@
                           text="Bao gom edge cases"
                           selected="true"/>
 
-                <Button text="Phan tich de"
+                <Button fx:id="analyzeBtn"
+                        text="Phan tich de"
                         onAction="#onAnalyze"
                         maxWidth="Infinity"
                         styleClass="btn-primary"/>
