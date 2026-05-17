@@ -1,5 +1,4 @@
 import asyncio
-import asyncio
 import re
 from enum import Enum
 
@@ -11,23 +10,14 @@ from models.schemas import (
 )
 from services.problem_analyzer import analyze_problem
 from services.problem_cache import load_cache, save_cache
-from services.testcase_coverage_checker import (
-    REQUIRED_TESTCASE_TAXONOMY,
-    TestcaseCoverageChecker,
-)
 from services.testcase_generator import (
-    CATEGORY_PROMPT_HINTS,
     KILLER_STRATEGIES,
     generate_single_killer_case,
     generate_testcases,
-    generate_with_hint,
 )
 
 
 MAX_KILLER_RETRIES = 3
-MIN_COVERAGE_TESTCASES = sum(
-    item["min_count"] for item in REQUIRED_TESTCASE_TAXONOMY.values()
-)
 
 
 class PipelineState(Enum):
@@ -46,7 +36,7 @@ class PipelineState(Enum):
 class PipelineOrchestrator:
     def __init__(self, request: PipelineRequest):
         self.request = request
-        self.target = max(MIN_COVERAGE_TESTCASES, min(request.count or 10, 50))
+        self.target = max(3, min(request.count or 10, 50))
         self.warnings: list[str] = []
         self.problem_text = request.problem_text or ""
         if len(self.problem_text) > 50000:
@@ -116,35 +106,7 @@ class PipelineOrchestrator:
                 "Dang sinh KILLER test cases...",
                 75,
             )
-            self.killer_cases = []
-            for attempt in range(MAX_KILLER_RETRIES):
-                yield self._progress(
-                    PipelineState.GENERATING_KILLER,
-                    f"Dang sinh KILLER test cases (attempt {attempt + 1}/{MAX_KILLER_RETRIES})...",
-                    75 + attempt * 4,
-                )
-                candidates = await self._generate_killer_parallel(plan.killer_count * 2)
-                valid = [
-                    case
-                    for case in candidates
-                    if self._is_valid_killer(case.input, case.description)
-                ]
-                self.killer_cases = _merge_unique_cases(self.killer_cases, valid)[
-                    : plan.killer_count
-                ]
-                if len(self.killer_cases) >= plan.killer_count:
-                    break
-                self.warnings.append(
-                    f"KILLER attempt {attempt + 1}: {len(self.killer_cases)}/{plan.killer_count}. Retrying."
-                )
-
-            if len(self.killer_cases) < plan.killer_count:
-                yield self._progress(
-                    PipelineState.GENERATING_KILLER,
-                    "KILLER fallback: promoting MEDIUM cases.",
-                    86,
-                )
-                self.killer_cases = self._promote_medium_to_killer(plan.killer_count)
+            self.killer_cases = await self._generate_killer_with_retry(plan.killer_count)
 
             yield self._progress(
                 PipelineState.QUALITY_GATE,
@@ -152,14 +114,6 @@ class PipelineOrchestrator:
                 88,
             )
             self._quality_gate(plan.killer_count)
-
-            yield self._progress(
-                PipelineState.QUALITY_GATE,
-                "Dang bo sung coverage testcase con thieu...",
-                92,
-            )
-            self._fill_coverage_gaps()
-            self._prioritize_cases_for_coverage()
 
             all_cases = self._all_cases()[: self.target]
             payload = {
@@ -262,6 +216,33 @@ class PipelineOrchestrator:
 
         return _merge_unique_cases(cases)
 
+    async def _generate_killer_with_retry(self, count: int) -> list[TestCaseSchema]:
+        if count <= 0:
+            return []
+
+        collected: list[TestCaseSchema] = []
+        for attempt in range(MAX_KILLER_RETRIES):
+            try:
+                candidates = await self._generate_killer_parallel(count * 2)
+                valid = [
+                    case
+                    for case in candidates
+                    if self._is_valid_killer(case.input, case.description)
+                ]
+                collected = _merge_unique_cases(collected, valid)[:count]
+                if len(collected) >= count:
+                    return collected
+                self.warnings.append(
+                    f"KILLER attempt {attempt + 1}: {len(collected)}/{count}. Retrying."
+                )
+            except Exception as exc:
+                self.warnings.append(
+                    f"KILLER attempt {attempt + 1} failed: {exc}"
+                )
+
+        self.warnings.append("KILLER fallback: promoting MEDIUM cases.")
+        return self._promote_medium_to_killer(count, collected)
+
     def _is_valid_killer(self, tc_input: str, description: str = "") -> bool:
         if not tc_input or not tc_input.strip():
             return False
@@ -287,8 +268,12 @@ class PipelineOrchestrator:
 
         return True
 
-    def _promote_medium_to_killer(self, count: int) -> list[TestCaseSchema]:
-        promoted: list[TestCaseSchema] = []
+    def _promote_medium_to_killer(
+        self,
+        count: int,
+        existing_cases: list[TestCaseSchema] | None = None,
+    ) -> list[TestCaseSchema]:
+        promoted: list[TestCaseSchema] = list(existing_cases or [])
         for case in self.medium_cases:
             if len(promoted) >= count:
                 break
@@ -307,139 +292,15 @@ class PipelineOrchestrator:
         if len(promoted) < count:
             generated = self._safe_generate_cases(
                 count - len(promoted),
-                "KILLER",
+                "MEDIUM",
                 _inputs_of(self._all_cases() + promoted),
             )
-            promoted = _merge_unique_cases(promoted, generated)
+            promoted = _merge_unique_cases(
+                promoted,
+                [_promoted_killer_case(case) for case in generated],
+            )
 
         return promoted[:count]
-
-    def _fill_coverage_gaps(self) -> None:
-        if self.problem is None:
-            return
-
-        checker = TestcaseCoverageChecker()
-        report = checker.check_coverage(self._all_cases(), self.problem)
-        if report["complete"]:
-            return
-
-        for missing in report["missing"]:
-            category = missing["category"]
-            needed = int(missing["need"]) - int(missing["have"])
-            if needed <= 0:
-                continue
-            profile = missing["profiles"][0]
-            new_cases = self._generate_targeted_cases(category, needed, profile)
-            if not new_cases:
-                self.warnings.append(
-                    f"Coverage top-up failed for {category}: needed {needed}."
-                )
-                continue
-            self._add_cases_to_profile(profile, new_cases)
-
-    def _generate_targeted_cases(
-        self,
-        category: str,
-        count: int,
-        profile: str,
-    ) -> list[TestCaseSchema]:
-        if self.problem is None or count <= 0:
-            return []
-
-        if category == "sample":
-            return self._sample_cases(count)
-
-        hint = CATEGORY_PROMPT_HINTS.get(category, category)
-        try:
-            return generate_with_hint(
-                self.problem,
-                count,
-                profile,
-                hint,
-                _inputs_of(self._all_cases()),
-                category,
-            )
-        except Exception as exc:
-            self.warnings.append(f"Targeted {category} generation failed: {exc}")
-            return []
-
-    def _sample_cases(self, count: int) -> list[TestCaseSchema]:
-        seen = {_input_key(value) for value in _inputs_of(self._all_cases())}
-        cases: list[TestCaseSchema] = []
-        for index, sample_input in enumerate(self.problem.sample_inputs if self.problem else []):
-            if len(cases) >= count:
-                break
-            key = _input_key(sample_input or "")
-            if not key:
-                continue
-            existing = self._find_case_by_input_key(key)
-            if existing:
-                existing.description = (
-                    f"[SMALL] sample - official sample test case {index + 1}"
-                )
-                cases.append(existing)
-                seen.add(key)
-                continue
-            if key in seen:
-                continue
-            cases.append(
-                TestCaseSchema(
-                    id=f"tc_sample_{index + 1}",
-                    input=sample_input.strip(),
-                    expected_output="",
-                    description=f"[SMALL] sample - official sample test case {index + 1}",
-                    is_edge_case=False,
-                )
-            )
-            seen.add(key)
-        return cases
-
-    def _find_case_by_input_key(self, key: str) -> TestCaseSchema | None:
-        for case in self._all_cases():
-            if _input_key(case.input if case else "") == key:
-                return case
-        return None
-
-    def _add_cases_to_profile(self, profile: str, cases: list[TestCaseSchema]) -> None:
-        profile_value = (profile or "SMALL").upper()
-        if profile_value == "KILLER":
-            self.killer_cases = _merge_unique_cases(self.killer_cases, cases)
-        elif profile_value == "MEDIUM":
-            self.medium_cases = _merge_unique_cases(self.medium_cases, cases)
-        else:
-            self.small_cases = _merge_unique_cases(self.small_cases, cases)
-
-    def _prioritize_cases_for_coverage(self) -> None:
-        checker = TestcaseCoverageChecker()
-        small_priority = {
-            "sample": 0,
-            "boundary": 1,
-            "edge_structural": 2,
-            "stress_random": 3,
-            "adversarial": 4,
-            "performance": 5,
-        }
-        medium_priority = {
-            "adversarial": 0,
-            "stress_random": 1,
-            "boundary": 2,
-            "edge_structural": 3,
-            "sample": 4,
-            "performance": 5,
-        }
-        killer_priority = {"performance": 0}
-        self.small_cases = sorted(
-            _merge_unique_cases(self.small_cases),
-            key=lambda case: small_priority.get(checker.infer_category(case), 9),
-        )
-        self.medium_cases = sorted(
-            _merge_unique_cases(self.medium_cases),
-            key=lambda case: medium_priority.get(checker.infer_category(case), 9),
-        )
-        self.killer_cases = sorted(
-            _merge_unique_cases(self.killer_cases),
-            key=lambda case: killer_priority.get(checker.infer_category(case), 9),
-        )
 
     def _safe_generate_cases(
         self,
@@ -534,6 +395,22 @@ def _input_key(value: str) -> str:
     return normalized.strip()
 
 
+def _promoted_killer_case(case: TestCaseSchema) -> TestCaseSchema:
+    description = case.description or ""
+    description = description.replace("[MEDIUM]", "").strip()
+    if description:
+        description = "[KILLER-promoted] " + description
+    else:
+        description = "[KILLER-promoted] MEDIUM fallback with max-size intent"
+    return TestCaseSchema(
+        id=case.id,
+        input=case.input,
+        expected_output=case.expected_output,
+        description=description,
+        is_edge_case=True,
+    )
+
+
 def _average_token_count(cases: list[TestCaseSchema]) -> float:
     if not cases:
         return 0.0
@@ -551,12 +428,12 @@ def _extract_max_n(constraints: list[str]) -> int:
     best = 0
     for constraint in constraints or []:
         text = str(constraint).replace(",", "")
-        value_pattern = r"((?:\d+\s*(?:\*|x|×|⋅|·)\s*)?10\s*\^\s*\d+|\d+(?:e\d+)?)"
+        value_pattern = r"((?:\d+\s*(?:\*|x)\s*)?10\s*\^\s*\d+|\d+(?:e\d+)?)"
         for pattern in (
-            rf"\bn\s*(?:<=|≤|<)\s*{value_pattern}",
-            rf"\bN\s*(?:<=|≤|<)\s*{value_pattern}",
-            rf"1\s*(?:<=|≤)\s*n\s*(?:<=|≤)\s*{value_pattern}",
-            rf"1\s*(?:<=|≤)\s*N\s*(?:<=|≤)\s*{value_pattern}",
+            rf"\bn\s*(?:<=|<)\s*{value_pattern}",
+            rf"\bN\s*(?:<=|<)\s*{value_pattern}",
+            rf"1\s*<=\s*n\s*<=\s*{value_pattern}",
+            rf"1\s*<=\s*N\s*<=\s*{value_pattern}",
         ):
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
@@ -566,7 +443,7 @@ def _extract_max_n(constraints: list[str]) -> int:
 
 def _parse_bound_value(value: str) -> int:
     text = (value or "").replace(" ", "").replace(",", "").lower()
-    text = text.replace("×", "*").replace("⋅", "*").replace("·", "*").replace("x", "*")
+    text = text.replace("x", "*")
     try:
         if "e" in text:
             return int(float(text))
@@ -590,17 +467,13 @@ def _extract_numbers(value: str) -> list[int]:
 
 
 def _build_test_pyramid_plan(total: int):
-    total = max(MIN_COVERAGE_TESTCASES, total)
-    small = max(7, round(total * 0.35))
-    killer = max(3, round(total * 0.25))
+    total = max(3, total)
+    small = max(1, round(total * 0.4))
+    killer = max(1, int(total * 0.3))
     medium = total - small - killer
-    if medium < 3:
-        shortage = 3 - medium
-        if small - shortage >= 7:
-            small -= shortage
-        else:
-            killer = max(3, killer - shortage)
-        medium = total - small - killer
+    if medium < 1:
+        medium = 1
+        small = max(1, total - medium - killer)
     return TestPyramidPlan(small, medium, killer)
 
 

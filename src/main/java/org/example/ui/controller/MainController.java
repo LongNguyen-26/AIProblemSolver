@@ -39,7 +39,6 @@ import java.util.concurrent.CompletableFuture;
 
 public class MainController implements Initializable {
     private static final String EXPECTED_OUTPUT_LANGUAGE = "cpp";
-    private static final int MIN_COVERAGE_TESTCASE_COUNT = 13;
 
     @FXML private Label serviceStatusLabel;
     @FXML private Label statusLabel;
@@ -178,6 +177,7 @@ public class MainController implements Initializable {
                         resultViewController.setTestCases(result.testCases);
                         mainTabPane.getSelectionModel().select(1);
                         setStatus(result.message);
+                        logProfileDistribution(result.testCases);
                     } finally {
                         setAnalyzeRunning(false);
                     }
@@ -1244,20 +1244,40 @@ public class MainController implements Initializable {
     }
 
     private TestPyramidPlan buildTestPyramidPlan(int requestedCount) {
-        int total = Math.max(MIN_COVERAGE_TESTCASE_COUNT, requestedCount);
-        int small = Math.max(7, (int) Math.round(total * 0.35));
-        int killer = Math.max(3, (int) Math.round(total * 0.25));
+        int total = Math.max(3, requestedCount);
+        int small = Math.max(1, (int) Math.round(total * 0.4));
+        int killer = Math.max(1, (int) Math.floor(total * 0.3));
         int medium = total - small - killer;
-        if (medium < 3) {
-            int shortage = 3 - medium;
-            if (small - shortage >= 7) {
-                small -= shortage;
-            } else {
-                killer = Math.max(3, killer - shortage);
-            }
+        if (medium < 1) {
+            medium = 1;
+            small = Math.max(1, total - medium - killer);
             medium = total - small - killer;
         }
         return new TestPyramidPlan(small, medium, killer, total);
+    }
+
+    private void logProfileDistribution(List<TestCase> testCases) {
+        long small = countProfile(testCases, "[SMALL");
+        long medium = countProfile(testCases, "[MEDIUM");
+        long killer = countProfile(testCases, "[KILLER");
+        String summary = String.format(
+                "Testcases: %d SMALL | %d MEDIUM | %d KILLER",
+                small,
+                medium,
+                killer
+        );
+        if (killer == 0) {
+            summary += " - Khong co KILLER case, kiem tra pipeline log";
+        }
+        setStatus(summary);
+    }
+
+    private long countProfile(List<TestCase> testCases, String marker) {
+        return (testCases == null ? List.<TestCase>of() : testCases).stream()
+                .filter(testCase -> valueOrEmpty(testCase.getDescription())
+                        .toUpperCase(Locale.ROOT)
+                        .contains(marker))
+                .count();
     }
 
     private void setStatusAsync(String message) {

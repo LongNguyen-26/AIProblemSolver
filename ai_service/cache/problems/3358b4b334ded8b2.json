@@ -23,70 +23,22 @@
   },
   "all_testcases": [
     {
-      "id": "tc_611fb0fe",
+      "id": "tc_ba9c5f0e",
       "input": "3\n5\n1 3 5 -7 9\n4\n-7 -1 -4 -6\n10\n1 -3 5 -7 9 -11 13 -15 17 -19",
       "expected_output": "",
-      "description": "Official sample input covering typical mixed values and negative numbers",
-      "is_edge_case": false
-    },
-    {
-      "id": "tc_d2ddb03e",
-      "input": "1\n2\n-1000000000 1000000000",
-      "expected_output": "",
-      "description": "Minimum size n=2 with extreme opposite values to test overflow handling",
-      "is_edge_case": true
-    },
-    {
-      "id": "tc_828e9d9d",
-      "input": "1\n2\n-5 10",
-      "expected_output": "",
-      "description": "Minimal size n=2 with mixed signs (edge case for smallest n)",
-      "is_edge_case": true
-    },
-    {
-      "id": "tc_59cc6bd5",
-      "input": "1\n50\n7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7",
-      "expected_output": "",
-      "description": "All elements equal positive value, testing handling of uniform arrays",
-      "is_edge_case": true
-    },
-    {
-      "id": "tc_9b4318db",
-      "input": "1\n60\n-1 -2 -3 -4 -5 -6 -7 -8 -9 -10 -11 -12 -13 -14 -15 -16 -17 -18 -19 -20 -21 -22 -23 -24 -25 -26 -27 -28 -29 -30 -31 -32 -33 -34 -35 -36 -37 -38 -39 -40 -41 -42 -43 -44 -45 -46 -47 -48 -49 -50 -51 -52 -53 -54 -55 -56 -57 -58 -59 -60",
-      "expected_output": "",
-      "description": "Strictly decreasing negative numbers, testing reverse sorted negative array",
-      "is_edge_case": true
-    },
-    {
-      "id": "tc_26765b88",
-      "input": "1\n100\n0 1000000000 -1000000000 5 -3 0 7 -7 2 -2 0 0 999999999 -999999999 1 -1 3 -3 4 -4 6 -6 8 -8 10 -10 12 -12 14 -14 16 -16 18 -18 20 -20 22 -22 24 -24 26 -26 28 -28 30 -30 32 -32 34 -34 36 -36 38 -38 40 -40 42 -42 44 -44 46 -46 48 -48 50 -50 52 -52 54 -54 56 -56 58 -58 60 -60 62 -62 64 -64 66 -66 68 -68 70 -70 72 -72 74 -74 76 -76 78 -78 80 -80 82 -82",
-      "expected_output": "",
-      "description": "Mixed values with zeros, extremes, and alternating signs, typical random-like case",
-      "is_edge_case": false
-    },
-    {
-      "id": "tc_08a12fe0",
-      "input": "1\n200000\n\n(Array(200000).fill(0).map(_\ni)=> (i%2===0?\n-1000000000\n:\n1000000000\n)).join(\n))]\ndescription\n:\nKiller stress test with maximum n=200000 alternating extreme values to provoke overflow and worst‑case reversal decisions\nis_edge_case\n:false",
-      "expected_output": "",
-      "description": "",
-      "is_edge_case": false
-    },
-    {
-      "id": "tc_28f40de3",
-      "input": "1\n199999\n\n(Array(199999).fill(0).map(_\ni)=> (i%3===0?\n999999999\n:(i%3===1?\n-999999999\n:\n0\n))).join(\n))]\ndescription\n:\nLarge near‑limit test with repeating pattern of large positive\nlarge negative and zero to challenge greedy logic\nis_edge_case\n:false",
-      "expected_output": "",
-      "description": "",
-      "is_edge_case": false
-    },
-    {
-      "id": "tc_3af57e37",
-      "input": "1\n200000\n\n(Array(200000).fill(0).map(_\ni)=> (i%5===0?\n500000000\n:(i%5===1?\n-500000001\n:(i%5===2?\n1\n:(i%5===3?\n-1\n:\n0\n)))).join(\n))]\ndescription\n:\nMaximum size test with mixed moderate values and small fluctuations to expose inefficiencies in segment handling\nis_edge_case\n:false",
-      "expected_output": "",
-      "description": "",
+      "description": "Sample test case 1",
       "is_edge_case": false
     }
   ],
   "warnings": [
-    "KILLER cases co ve qua nho so voi SMALL cases; da thu regenerate voi profile KILLER."
+    "KILLER attempt 1: 0/3. Retrying.",
+    "KILLER attempt 2: 0/3. Retrying.",
+    "KILLER attempt 3: 0/3. Retrying.",
+    "Khong co KILLER cases de kiem tra do kho.",
+    "Coverage top-up failed for boundary: needed 2.",
+    "Coverage top-up failed for edge_structural: needed 2.",
+    "Coverage top-up failed for adversarial: needed 3.",
+    "Coverage top-up failed for stress_random: needed 2.",
+    "Coverage top-up failed for performance: needed 3."
   ]
 }
