@@ -67,6 +67,17 @@ def classify_problem_fast(problem: ProblemSchema) -> ProblemClassification:
 
 def apply_classification(problem: ProblemSchema) -> ProblemSchema:
     classification = classify_problem(problem)
+    return _apply_classification_result(problem, classification)
+
+
+def apply_keyword_classification(problem: ProblemSchema) -> ProblemSchema:
+    return _apply_classification_result(problem, _keyword_classification(problem))
+
+
+def _apply_classification_result(
+    problem: ProblemSchema,
+    classification: ProblemClassification,
+) -> ProblemSchema:
     problem.problem_type = classification.primary_type
     problem.secondary_type = classification.secondary_type or ""
     problem.type_confidence = classification.confidence
@@ -98,7 +109,7 @@ def extract_max_n(constraints_text: str | list[str]) -> Optional[int]:
         r"\d+(?:\.\d+)?(?:e\d+)?)"
     )
     relation = r"(?:<=|<|\\leq|\u2264)"
-    variable = r"(?:n|m|q|k|length|len)"
+    variable = r"(?:[a-z][a-z0-9_]*|length|len)"
     patterns = [
         rf"\b{variable}\b\s*{relation}\s*{value_pattern}",
         rf"\d+\s*{relation}\s*\b{variable}\b\s*{relation}\s*{value_pattern}",

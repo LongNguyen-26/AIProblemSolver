@@ -9,7 +9,7 @@ from models.schemas import (
 )
 from services.complexity_analyzer import analyze_complexity
 from services.ocr_service import image_base64_to_text
-from services.problem_analyzer import analyze_problem
+from services.problem_analyzer import analyze_problem, fallback_analyze_problem
 
 router = APIRouter()
 
@@ -43,16 +43,4 @@ async def complexity(request: ComplexityRequest):
 
 
 def _fallback_problem(text: str, reason: str) -> ProblemSchema:
-    return ProblemSchema(
-        title="Problem (unparsed)",
-        description=(text or reason or "Problem text could not be parsed."),
-        input_format="",
-        output_format="",
-        constraints=[],
-        sample_inputs=[],
-        sample_outputs=[],
-        problem_type="UNKNOWN",
-        secondary_type="",
-        type_confidence=0.0,
-        tle_strategy="",
-    )
+    return fallback_analyze_problem(text, reason)

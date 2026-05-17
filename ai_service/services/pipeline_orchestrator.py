@@ -8,7 +8,7 @@ from models.schemas import (
     ProblemSchema,
     TestCaseSchema,
 )
-from services.problem_analyzer import analyze_problem
+from services.problem_analyzer import analyze_problem, fallback_analyze_problem
 from services.problem_classifier import apply_tle_relevance_metadata
 from services.problem_cache import load_cache, save_cache
 from services.testcase_generator import (
@@ -53,9 +53,11 @@ class PipelineOrchestrator:
     async def run(self):
         try:
             cached = load_cache(self.problem_text)
-            if cached:
+            if cached and not _cached_problem_is_unparsed(cached):
                 yield self._progress_from_cache(cached)
                 return
+            if cached:
+                self.warnings.append("Bo qua pipeline cache cu vi problem bi unparsed.")
 
             yield self._progress(
                 PipelineState.CLASSIFYING,
@@ -122,7 +124,8 @@ class PipelineOrchestrator:
                 "all_testcases": [case.model_dump() for case in all_cases],
                 "warnings": self.warnings,
             }
-            save_cache(self.problem_text, payload)
+            if not _is_unparsed_problem(self.problem):
+                save_cache(self.problem_text, payload)
 
             yield self._progress(
                 PipelineState.DONE,
@@ -483,18 +486,28 @@ def _build_test_pyramid_plan(total: int):
 
 
 def _fallback_problem(text: str, reason: str) -> ProblemSchema:
-    return ProblemSchema(
-        title="Problem (unparsed)",
-        description=text or reason or "Pipeline could not parse the problem statement.",
-        input_format="",
-        output_format="",
-        constraints=[],
-        sample_inputs=[],
-        sample_outputs=[],
-        problem_type="UNKNOWN",
-        secondary_type="",
-        type_confidence=0.0,
-        tle_strategy="",
+    return fallback_analyze_problem(text, reason)
+
+
+def _cached_problem_is_unparsed(cached: dict) -> bool:
+    problem_data = cached.get("problem") or {}
+    if not isinstance(problem_data, dict):
+        return True
+    try:
+        return _is_unparsed_problem(ProblemSchema(**problem_data))
+    except Exception:
+        return True
+
+
+def _is_unparsed_problem(problem: ProblemSchema | None) -> bool:
+    if problem is None:
+        return True
+    title = (problem.title or "").strip().lower()
+    return (
+        title == "problem (unparsed)"
+        and not (problem.input_format or "").strip()
+        and not (problem.output_format or "").strip()
+        and not problem.constraints
     )
 
 
