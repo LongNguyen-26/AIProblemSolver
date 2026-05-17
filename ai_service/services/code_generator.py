@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from models.schemas import CodeGenResponse, ComplexityInfo, ProblemSchema, TestCaseSchema
@@ -5,76 +6,43 @@ from services.groq_json import request_json, request_text
 
 
 TYPE_INSTRUCTIONS = {
-    "AC": (
-        "Write a CORRECT, optimal solution. It must pass all test cases. "
-        "Do not use heuristics, probabilistic assumptions, or arguments like "
-        "'rare in practice'. Handle adversarial inputs within the stated constraints. "
-        "For constructive or multiple-solution problems, print a deterministic "
-        "canonical valid solution and print an impossibility marker such as "
-        "NO SOLUTION only after the algorithm has proven impossibility."
-    ),
+    "AC": "Correct, efficient solution. Handle adversarial edge cases.",
     "ORACLE": (
-        "Write a complete, correct reference solution used only to compute expected "
-        "outputs for validation-sized generated tests. Prioritize exact problem "
-        "semantics, simplicity, and debuggability over asymptotic optimality. If the "
-        "official constraints are huge but the input is small, use a straightforward "
-        "simulation or brute-force approach when that is less error-prone. For "
-        "constructive problems, exhaustively search a valid output on small inputs "
-        "when feasible; do not print NO SOLUTION unless the search proves it."
+        "Correct reference solution for generated tests. Prefer clear exact logic."
     ),
     "BRUTE": (
-        "Write a complete brute-force reference solution for small validation inputs. "
-        "Prioritize obvious correctness over performance. Directly simulate the "
-        "statement whenever possible, even if the complexity would be too slow for "
-        "official maximum constraints. For constructive or multiple-solution "
-        "problems, enumerate possible outputs for small inputs and print a valid "
-        "solution if one exists; print NO SOLUTION only after exhaustive proof."
+        "Brute-force reference for small inputs. Exhaustively prove impossibility."
     ),
     "BRUTE_ALT": (
-        "Write a second independent brute-force reference solution for small "
-        "validation inputs. Use a different implementation style from the obvious "
-        "primary brute force when possible. Prioritize exact statement semantics over "
-        "speed. For constructive or multiple-solution problems, independently "
-        "search for a valid output on small inputs instead of guessing impossibility."
+        "Second independent brute-force reference. Use different implementation style."
     ),
     "ORACLE_ALT": (
-        "Write a complete, correct reference solution used only to cross-check another "
-        "oracle on validation-sized generated tests. Use an independent implementation "
-        "style or algorithmic approach from the obvious primary solution. Prioritize "
-        "exact problem semantics and clarity over speed. For constructive problems, "
-        "produce a deterministic valid output and avoid unsupported NO SOLUTION."
+        "Independent correct oracle. Prioritize exact semantics and deterministic output."
     ),
     "OPTIMIZED_ALT": (
-        "Write a complete optimized solution intended for larger generated tests. Use "
-        "an independent implementation style from a standard solution where possible. "
-        "Do not use heuristics or assumptions; it must follow the exact problem "
-        "semantics. For constructive or multiple-solution problems, print a "
-        "deterministic canonical valid solution."
+        "Optimized correct solution for larger tests. No heuristics."
     ),
     "WA": (
-        "Write a solution with exactly one subtle bug that gives WRONG ANSWER "
-        "on specific cases while still compiling and following the correct "
-        "overall algorithm structure."
+        "Correct structure, exactly one subtle logic bug, compiles and runs."
     ),
     "TLE": (
-        "Write a solution that is logically CORRECT and should pass sample, small, "
-        "and medium tests, but is intentionally too slow for large/killer tests due "
-        "to poor asymptotic complexity (for example O(n^2) or O(n*q) where an "
-        "optimized solution is expected). Do not use infinite loops, sleeps, random "
-        "behavior, deliberate wrong answers, or compile/runtime errors. If the "
-        "program finishes on a test case, its output must be accepted; a completed "
-        "WRONG ANSWER is not a valid TLE solution. For constructive or "
-        "multiple-solution problems, use a complete slow search or the same "
-        "canonical construction style as a correct solution, not an unsupported "
-        "one-variable heuristic."
+        "Correct logic with slow asymptotic complexity. No sleep, dummy, or infinite loops."
     ),
     "GENERATOR": (
-        "Write a Python random input generator for this competitive programming "
-        "problem. The generator reads an optional integer seed from stdin and "
-        "prints exactly one complete valid stdin instance for the target problem. "
-        "Keep generated values small enough for brute-force reference solutions "
-        "but diverse enough to expose edge cases. Print only the generated input."
+        "Python random input generator. Read optional seed, print one valid stdin."
     ),
+}
+
+CODEGEN_MAX_TOKENS_BY_TYPE = {
+    "AC": 3000,
+    "ORACLE": 2800,
+    "BRUTE": 2600,
+    "BRUTE_ALT": 2600,
+    "ORACLE_ALT": 2800,
+    "OPTIMIZED_ALT": 2800,
+    "WA": 2200,
+    "TLE": 2400,
+    "GENERATOR": 1400,
 }
 
 
@@ -145,7 +113,7 @@ def generate_code(
 {instruction}
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_codegen_problem_json(problem)}
 
 Language: {language}
 
@@ -165,7 +133,10 @@ Return ONLY valid JSON:
 Escape all line breaks inside the code string as \\n.
 """
 
-    data = request_json([{"role": "user", "content": prompt}])
+    data = request_json(
+        [{"role": "user", "content": prompt}],
+        max_tokens=CODEGEN_MAX_TOKENS_BY_TYPE.get(code_type, 2600),
+    )
     code = _find_text_value(data, "code", "source_code", "solution")
     explanation = _find_text_value(data, "explanation", "notes")
     if not code.strip():
@@ -196,7 +167,8 @@ def _generate_wa_code(
         [
             {"role": "system", "content": WA_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
-        ]
+        ],
+        max_tokens=CODEGEN_MAX_TOKENS_BY_TYPE["WA"],
     )
     return _strip_code_fence(content)
 
@@ -216,10 +188,10 @@ def _build_wa_prompt(
         else ""
     )
     return WA_USER_PROMPT.format(
-        problem_description=value_or_na(problem.description),
-        input_format=value_or_na(problem.input_format),
-        output_format=value_or_na(problem.output_format),
-        constraints="\n".join(problem.constraints or []) or "N/A",
+        problem_description=value_or_na(_truncate_prompt_text(problem.description, 1000)),
+        input_format=value_or_na(_truncate_prompt_text(problem.input_format, 500)),
+        output_format=value_or_na(_truncate_prompt_text(problem.output_format, 350)),
+        constraints=_truncate_prompt_text("\n".join(problem.constraints or []), 600) or "N/A",
         sample_cases_formatted=_format_wa_sample_cases(sample_cases),
         language=language,
         comment_prefix=comment_prefix,
@@ -262,8 +234,8 @@ def _case_text(case: TestCaseSchema | dict[str, Any], field: str) -> str:
     return "" if value is None else str(value)
 
 
-def _truncate_prompt_text(value: str, limit: int) -> str:
-    text = value.strip()
+def _truncate_prompt_text(value: str | None, limit: int) -> str:
+    text = str(value or "").strip()
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "\n...[truncated]"
@@ -284,6 +256,26 @@ def value_or_na(value: str) -> str:
     return value if value and str(value).strip() else "N/A"
 
 
+def _codegen_problem_json(problem: ProblemSchema) -> str:
+    context = {
+        "title": _truncate_prompt_text(problem.title, 120),
+        "description": _truncate_prompt_text(problem.description, 1200),
+        "input_format": _truncate_prompt_text(problem.input_format, 600),
+        "output_format": _truncate_prompt_text(problem.output_format, 400),
+        "constraints": _truncate_prompt_text("; ".join(problem.constraints or []), 700),
+        "sample_inputs": [
+            _truncate_prompt_text(value, 600) for value in (problem.sample_inputs or [])[:2]
+        ],
+        "sample_outputs": [
+            _truncate_prompt_text(value, 600) for value in (problem.sample_outputs or [])[:2]
+        ],
+        "problem_type": problem.problem_type or "",
+        "secondary_type": problem.secondary_type or "",
+        "max_constraint_n": problem.max_constraint_n,
+    }
+    return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+
+
 def _generate_code_text(
     problem: ProblemSchema, code_type: str, language: str, instruction: str
 ) -> str:
@@ -291,13 +283,16 @@ def _generate_code_text(
 {instruction}
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_codegen_problem_json(problem)}
 
 Language: {language}
 
 Return ONLY the complete source code. Do not use markdown fences.
 """
-    content = request_text([{"role": "user", "content": prompt}])
+    content = request_text(
+        [{"role": "user", "content": prompt}],
+        max_tokens=CODEGEN_MAX_TOKENS_BY_TYPE.get(code_type, 2600),
+    )
     return _strip_code_fence(content)
 
 
@@ -310,29 +305,12 @@ def _instruction_for_code_type(
 
     info = _normalize_complexity_info(complexity_info)
     return f"""
-Generate a solution for this problem that is:
-1. CORRECT: it produces the right answer for every valid input.
-2. SLOW: it uses {info.tle_strategy} with complexity {info.tle_target_complexity}.
-3. Input-dependent: the slowness must come from the algorithm and scale with the
-   real input size, not from artificial work.
-
-Complexity target:
-- Expected optimal complexity: {info.optimal_complexity}
-- Slow TLE target complexity: {info.tle_target_complexity}
-- Approximate max N: {info.max_n}
-- Strategy: {info.tle_strategy}
-- Why this is slow but correct: {info.tle_explanation}
-
-Forbidden:
-- sleep(), usleep(), Thread.sleep(), delay, timers, or wall-clock checks
-- infinite loops
-- fixed dummy loops that do not depend on parsed input
-- random or nondeterministic behavior
-- deliberate wrong answers, compile errors, or runtime errors
-
-If the program finishes on a validation case, its output must match the expected
-output exactly. For large inputs, it should become slow because the selected
-algorithm has poor asymptotic complexity.
+Generate TLE code:
+- Correct output on every completed run.
+- Slow strategy: {info.tle_strategy}, target {info.tle_target_complexity}.
+- Max size hint: {info.max_n}; optimal: {info.optimal_complexity}.
+- No sleep, dummy loops, infinite loops, random, CE, RE, or WA.
+- Slowness must scale with parsed input size.
 """.strip()
 
 
@@ -374,7 +352,7 @@ Original instruction:
 {instruction}
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_codegen_problem_json(problem)}
 
 Language: {language}
 
@@ -388,7 +366,12 @@ Error / wrong-answer feedback:
 
 Return ONLY the fixed complete source code. Do not use markdown fences.
 """
-    return _strip_code_fence(request_text([{"role": "user", "content": prompt}]))
+    return _strip_code_fence(
+        request_text(
+            [{"role": "user", "content": prompt}],
+            max_tokens=CODEGEN_MAX_TOKENS_BY_TYPE.get(code_type, 2600),
+        )
+    )
 
 
 def generate_input_generator(problem: ProblemSchema, profile: str = "SMALL") -> str:
@@ -396,7 +379,7 @@ def generate_input_generator(problem: ProblemSchema, profile: str = "SMALL") -> 
 {TYPE_INSTRUCTIONS["GENERATOR"]}
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_codegen_problem_json(problem)}
 
 Profile: {profile}
 
@@ -410,7 +393,12 @@ Rules:
 
 Return ONLY the complete Python source code.
 """
-    return _strip_code_fence(request_text([{"role": "user", "content": prompt}]))
+    return _strip_code_fence(
+        request_text(
+            [{"role": "user", "content": prompt}],
+            max_tokens=CODEGEN_MAX_TOKENS_BY_TYPE["GENERATOR"],
+        )
+    )
 
 
 def _find_text_value(data: dict, *keys: str) -> str:

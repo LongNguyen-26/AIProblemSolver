@@ -36,7 +36,7 @@ Problem:
 def analyze_complexity(problem: ProblemSchema) -> ComplexityInfo:
     prompt = COMPLEXITY_PROMPT.replace("{problem_text}", _format_problem(problem))
     try:
-        data = request_json([{"role": "user", "content": prompt}])
+        data = request_json([{"role": "user", "content": prompt}], max_tokens=700)
         return _normalize_complexity_info(data, problem)
     except Exception:
         return _heuristic_complexity_info(problem)
@@ -157,12 +157,19 @@ def _format_problem(problem: ProblemSchema) -> str:
     return "\n".join(
         [
             "Title: " + (problem.title or ""),
-            "Description: " + (problem.description or ""),
-            "Input: " + (problem.input_format or ""),
-            "Output: " + (problem.output_format or ""),
-            "Constraints: " + "; ".join(problem.constraints or []),
+            "Description: " + _truncate(problem.description, 1200),
+            "Input: " + _truncate(problem.input_format, 500),
+            "Output: " + _truncate(problem.output_format, 300),
+            "Constraints: " + _truncate("; ".join(problem.constraints or []), 700),
         ]
     )
+
+
+def _truncate(value: str | None, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
 
 
 def _string_value(value: Any, fallback: str) -> str:

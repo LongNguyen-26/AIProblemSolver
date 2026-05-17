@@ -19,6 +19,7 @@ from services.testcase_generator import (
 
 
 MAX_KILLER_RETRIES = 3
+KILLER_CALL_DELAY_SECONDS = 0.25
 
 
 class PipelineState(Enum):
@@ -191,21 +192,22 @@ class PipelineOrchestrator:
 
         strategies = _killer_strategies_for_problem(self.problem)
         requested = max(count, min(len(strategies), count * 2))
-        tasks = [
-            asyncio.to_thread(
-                generate_single_killer_case,
-                self.problem,
-                strategy,
-                _inputs_of(self._all_cases()),
-            )
-            for strategy in strategies[:requested]
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        cases = [
-            result
-            for result in results
-            if isinstance(result, TestCaseSchema) and result.input
-        ]
+        cases: list[TestCaseSchema] = []
+        for strategy in strategies[:requested]:
+            try:
+                result = await asyncio.to_thread(
+                    generate_single_killer_case,
+                    self.problem,
+                    strategy,
+                    _inputs_of(self._all_cases() + cases),
+                )
+                if isinstance(result, TestCaseSchema) and result.input:
+                    cases.append(result)
+                    if len(_merge_unique_cases(cases)) >= count:
+                        break
+            except Exception as exc:
+                self.warnings.append(f"KILLER strategy failed: {exc}")
+            await asyncio.sleep(KILLER_CALL_DELAY_SECONDS)
 
         if len(cases) < count:
             fallback = await asyncio.to_thread(

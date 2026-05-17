@@ -1,4 +1,5 @@
 import ast
+import json
 import subprocess
 import sys
 import tempfile
@@ -24,9 +25,15 @@ MAX_KILLER_SCRIPT_CHARS = 6000
 KILLER_SCRIPT_TIMEOUT_SECONDS = 8
 SCRIPT_KILLER_MIN_BOUND = 5000
 MAX_GENERATION_ATTEMPTS = 3
-MAX_EXISTING_INPUTS_IN_PROMPT = 20
-MAX_EXISTING_INPUT_CHARS_IN_PROMPT = 1000
+MAX_EXISTING_INPUTS_IN_PROMPT = 10
+MAX_EXISTING_INPUT_CHARS_IN_PROMPT = 300
 MAX_KILLER_STRATEGY_BUFFER = 2
+MAX_TOKENS_BY_PROFILE = {
+    "SMALL": 700,
+    "MEDIUM": 900,
+    "KILLER": 650,
+}
+KILLER_SCRIPT_MAX_TOKENS = 800
 ALLOWED_KILLER_SCRIPT_IMPORTS = {"collections", "itertools", "math", "random", "sys"}
 BLOCKED_KILLER_SCRIPT_NAMES = {
     "__import__",
@@ -309,7 +316,7 @@ def _generate_single_killer_case_direct(
 You are generating a KILLER test case for a competitive programming problem.
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_problem_context_json(problem, "KILLER")}
 
 Problem type: {classification.primary_type}
 Constraints:
@@ -336,7 +343,10 @@ Input format:
 Generate the killer test case now:
 """
     try:
-        content = request_text([{"role": "user", "content": prompt}])
+        content = request_text(
+            [{"role": "user", "content": prompt}],
+            max_tokens=MAX_TOKENS_BY_PROFILE["KILLER"],
+        )
     except Exception:
         return None
 
@@ -415,7 +425,8 @@ O(n*m), recursion-depth, or naive per-query algorithms. Keep stdout under
                 [
                     {"role": "system", "content": KILLER_SCRIPT_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
-                ]
+                ],
+                max_tokens=KILLER_SCRIPT_MAX_TOKENS,
             )
         ).strip()
     except Exception:
@@ -544,7 +555,7 @@ def _generate_json_testcases(
 You are an expert at generating test cases for competitive programming problems.
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_problem_context_json(problem, profile)}
 
 CRITICAL: You MUST return EXACTLY {count} test cases in the JSON array.
 If you cannot think of {count} distinct cases, generate valid variations with
@@ -576,7 +587,10 @@ Do not include expected outputs.
 Do not put newline characters inside JSON string values. Use input_lines arrays instead.
 """
 
-    data = request_json([{"role": "user", "content": prompt}])
+    data = request_json(
+        [{"role": "user", "content": prompt}],
+        max_tokens=MAX_TOKENS_BY_PROFILE.get(profile, 900),
+    )
     return _normalize_testcases(_raw_testcases(data), count)
 
 
@@ -595,7 +609,7 @@ def _generate_text_testcases(
 You are an expert at generating test cases for competitive programming problems.
 
 Problem:
-{problem.model_dump_json(indent=2)}
+{_problem_context_json(problem, profile)}
 
 CRITICAL: You MUST return EXACTLY {count} test cases.
 If you cannot think of {count} distinct cases, generate valid variations with
@@ -623,7 +637,10 @@ full stdin here
 Do not use JSON. Do not use markdown fences.
 The DESC line must name the profile and the type-specific edge/killer pattern targeted.
 """
-    content = request_text([{"role": "user", "content": prompt}])
+    content = request_text(
+        [{"role": "user", "content": prompt}],
+        max_tokens=MAX_TOKENS_BY_PROFILE.get(profile, 900),
+    )
     return _parse_text_cases(content, count)
 
 
@@ -662,6 +679,40 @@ def _killer_strategies_for(problem: ProblemSchema) -> list[str]:
     if taxonomy_strategy:
         strategies.insert(0, taxonomy_strategy)
     return list(dict.fromkeys(strategy for strategy in strategies if strategy))
+
+
+def _problem_context_json(problem: ProblemSchema, profile: str) -> str:
+    return json.dumps(
+        _build_minimal_problem_context(problem, profile),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _build_minimal_problem_context(problem: ProblemSchema, profile: str) -> dict[str, Any]:
+    normalized = _normalize_profile(profile)
+    context: dict[str, Any] = {
+        "title": _truncate_text(problem.title, 120),
+        "input_format": _truncate_text(problem.input_format, 500),
+        "output_format": _truncate_text(problem.output_format, 350),
+        "constraints": _truncate_text("; ".join(problem.constraints or []), 500),
+    }
+    if normalized == "SMALL":
+        context["sample_inputs"] = [
+            _truncate_text(value, 500) for value in (problem.sample_inputs or [])[:2]
+        ]
+        context["sample_outputs"] = [
+            _truncate_text(value, 500) for value in (problem.sample_outputs or [])[:2]
+        ]
+        return context
+
+    context["problem_type"] = problem.problem_type or ""
+    context["secondary_type"] = problem.secondary_type or ""
+    context["description"] = _truncate_text(problem.description, 700)
+    if normalized == "KILLER":
+        context["tle_strategy"] = problem.tle_strategy or ""
+        context["max_constraint_n"] = problem.max_constraint_n
+    return context
 
 
 def _constraint_text(problem: ProblemSchema) -> str:
@@ -977,6 +1028,13 @@ def _string_value(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _truncate_text(value: str | None, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
 
 
 def _bool_value(value: Any) -> bool:

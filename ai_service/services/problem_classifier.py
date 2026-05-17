@@ -44,7 +44,7 @@ def classify_problem(problem: ProblemSchema) -> ProblemClassification:
             .replace("{output_format}", problem.output_format or "")
             .replace("{constraints}", "; ".join(problem.constraints or []))
         )
-        data = request_json([{"role": "user", "content": prompt}])
+        data = request_json([{"role": "user", "content": prompt}], max_tokens=500)
         classification = _normalize_classification(data, keyword_classification)
     except Exception:
         classification = keyword_classification

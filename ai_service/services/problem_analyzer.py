@@ -1,3 +1,4 @@
+import hashlib
 import re
 
 from models.schemas import ProblemSchema
@@ -5,34 +6,36 @@ from services.groq_json import request_json
 from services.problem_classifier import apply_classification, apply_keyword_classification
 
 
-ANALYZE_SYSTEM_PROMPT = """
-You are an expert competitive programming problem analyzer.
-Given a problem statement, extract and return ONLY a JSON object with these fields:
-- title: string
-- description: string (full problem description)
-- input_format: string
-- output_format: string
-- constraints: array of strings (each constraint as one element)
-- sample_inputs: array of strings
-- sample_outputs: array of strings
+ANALYZE_SYSTEM_PROMPT = """Extract competitive-programming statement fields.
+Return ONLY JSON with: title, description, input_format, output_format,
+constraints, sample_inputs, sample_outputs. No markdown."""
 
-Respond with ONLY valid JSON, no markdown, no explanation.
-Escape line breaks inside JSON strings as \\n.
-"""
+MAX_ANALYZE_PROMPT_CHARS = 12000
+_analysis_cache: dict[str, dict] = {}
 
 
 def analyze_problem(text: str) -> ProblemSchema:
+    cache_key = _analysis_cache_key(text)
+    if cache_key in _analysis_cache:
+        return ProblemSchema(**_analysis_cache[cache_key])
+
     heuristic = _parse_problem_heuristic(text)
     try:
         data = request_json(
             [
                 {"role": "system", "content": ANALYZE_SYSTEM_PROMPT},
-                {"role": "user", "content": f"Analyze this problem:\n\n{text}"},
-            ]
+                {
+                    "role": "user",
+                    "content": f"Analyze this problem:\n\n{_analysis_prompt_text(text)}",
+                },
+            ],
+            max_tokens=1600,
         )
-        return apply_classification(_merge_problem(ProblemSchema(**data), heuristic))
+        problem = apply_classification(_merge_problem(ProblemSchema(**data), heuristic))
     except Exception:
-        return apply_keyword_classification(heuristic)
+        problem = apply_keyword_classification(heuristic)
+    _analysis_cache[cache_key] = problem.model_dump()
+    return problem
 
 
 def fallback_analyze_problem(text: str, reason: str = "") -> ProblemSchema:
@@ -40,6 +43,19 @@ def fallback_analyze_problem(text: str, reason: str = "") -> ProblemSchema:
     if not problem.description and reason:
         problem.description = reason
     return apply_keyword_classification(problem)
+
+
+def _analysis_cache_key(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+def _analysis_prompt_text(text: str) -> str:
+    value = text or ""
+    if len(value) <= MAX_ANALYZE_PROMPT_CHARS:
+        return value
+    head = value[:10000].rstrip()
+    tail = value[-1800:].lstrip()
+    return head + "\n\n...[statement truncated; ending follows]...\n\n" + tail
 
 
 def _parse_problem_heuristic(text: str) -> ProblemSchema:
