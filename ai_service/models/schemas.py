@@ -15,6 +15,8 @@ class ProblemSchema(BaseModel):
     secondary_type: str = ""
     type_confidence: float = 0.0
     tle_strategy: str = ""
+    max_constraint_n: Optional[int] = None
+    is_small_n: Optional[bool] = False
 
 
 class ProblemClassification(BaseModel):

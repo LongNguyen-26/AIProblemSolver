@@ -9,6 +9,7 @@ from models.schemas import (
     TestCaseSchema,
 )
 from services.problem_analyzer import analyze_problem
+from services.problem_classifier import apply_tle_relevance_metadata
 from services.problem_cache import load_cache, save_cache
 from services.testcase_generator import (
     KILLER_STRATEGIES,
@@ -347,7 +348,11 @@ class PipelineOrchestrator:
     def _progress_from_cache(self, cached: dict) -> PipelineProgress:
         problem_data = cached.get("problem") or {}
         case_data = cached.get("all_testcases") or []
-        problem = ProblemSchema(**problem_data) if problem_data else None
+        problem = (
+            apply_tle_relevance_metadata(ProblemSchema(**problem_data))
+            if problem_data
+            else None
+        )
         cases = [TestCaseSchema(**case) for case in case_data if isinstance(case, dict)]
         warnings = list(cached.get("warnings") or [])
         return PipelineProgress(

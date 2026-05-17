@@ -24,6 +24,10 @@ public class Problem {
     private double typeConfidence;
     @SerializedName("tle_strategy")
     private String tleStrategy;
+    @SerializedName("max_constraint_n")
+    private Integer maxConstraintN;
+    @SerializedName("is_small_n")
+    private Boolean isSmallN;
 
     public Problem() {
     }
@@ -114,6 +118,22 @@ public class Problem {
 
     public void setTleStrategy(String tleStrategy) {
         this.tleStrategy = tleStrategy;
+    }
+
+    public Integer getMaxConstraintN() {
+        return maxConstraintN;
+    }
+
+    public void setMaxConstraintN(Integer maxConstraintN) {
+        this.maxConstraintN = maxConstraintN;
+    }
+
+    public boolean isSmallN() {
+        return Boolean.TRUE.equals(isSmallN);
+    }
+
+    public void setSmallN(Boolean smallN) {
+        isSmallN = smallN;
     }
 
     @Override

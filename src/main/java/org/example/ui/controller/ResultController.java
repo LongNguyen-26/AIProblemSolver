@@ -9,6 +9,7 @@ import javafx.fxml.Initializable;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.OverrunStyle;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
@@ -17,6 +18,7 @@ import javafx.scene.control.TextArea;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.stage.FileChooser;
+import javafx.util.Duration;
 import org.example.model.AnalysisReport;
 import org.example.model.CodeSubmission;
 import org.example.model.ComplexityInfo;
@@ -40,9 +42,12 @@ import java.util.concurrent.CompletableFuture;
 public class ResultController implements Initializable {
     private static final int TLE_GENERATION_ATTEMPTS = 3;
     private static final int MAX_TLE_VALIDATION_CASES = 3;
+    private static final int N_SMALL_THRESHOLD = 1000;
     private static final int MAX_WA_RETRIES = 3;
     private static final int MAX_WA_VALIDATION_CASES = 5;
     private static final int MAX_WA_PROMPT_CASES = 3;
+    private static final String TLE_DISABLED_MESSAGE =
+            "Bai toan co gioi han du lieu nho, khong yeu cau kiem thu hieu nang (TLE).";
 
     @FXML private ComboBox<String> codeTypeCombo;
     @FXML private ComboBox<String> languageCombo;
@@ -73,6 +78,7 @@ public class ResultController implements Initializable {
     public void initialize(URL url, ResourceBundle resourceBundle) {
         codeTypeCombo.getItems().setAll("AC", "WA", "TLE");
         codeTypeCombo.getSelectionModel().select("AC");
+        configureCodeTypeCombo();
         languageCombo.getItems().setAll("cpp", "python", "java");
         languageCombo.getSelectionModel().select("cpp");
 
@@ -98,6 +104,7 @@ public class ResultController implements Initializable {
     public void setProblem(Problem problem) {
         this.problem = problem;
         this.preferredAcSubmission = null;
+        updateTleOptionState();
     }
 
     public void setPreferredAcSubmission(CodeSubmission submission) {
@@ -132,6 +139,10 @@ public class ResultController implements Initializable {
 
         String codeType = codeTypeCombo.getValue();
         String language = languageCombo.getValue();
+        if ("TLE".equals(codeType) && isTleIrrelevant(problem)) {
+            showTleUnavailable();
+            return;
+        }
         if ("AC".equals(codeType) && canUsePreferredAc(language)) {
             displaySubmission(preferredAcSubmission);
             summaryLabel.setText("Da dung cached AC oracle");
@@ -166,6 +177,9 @@ public class ResultController implements Initializable {
 
     private CodeSubmission generateCodeWithValidation(String codeType, String language)
             throws Exception {
+        if ("TLE".equals(codeType) && isTleIrrelevant(problem)) {
+            throw new IllegalStateException(TLE_DISABLED_MESSAGE);
+        }
         if ("WA".equals(codeType)) {
             return generateWaCodeWithValidation(language);
         }
@@ -701,6 +715,87 @@ public class ResultController implements Initializable {
             runAllTestsBtn.setDisable(externalBusy || testRunInProgress);
             runAllTestsBtn.setText(testRunInProgress ? "Dang chay..." : "Chay tat ca test");
         }
+    }
+
+    private void configureCodeTypeCombo() {
+        codeTypeCombo.setCellFactory(listView -> codeTypeCell());
+        codeTypeCombo.setButtonCell(codeTypeCell());
+        codeTypeCombo.valueProperty().addListener((ignored, oldValue, newValue) -> {
+            if ("TLE".equals(newValue) && isTleIrrelevant(problem)) {
+                String fallback = oldValue == null || "TLE".equals(oldValue) ? "AC" : oldValue;
+                Platform.runLater(() -> codeTypeCombo.getSelectionModel().select(fallback));
+                summaryLabel.setText("TLE khong kha dung cho bai nay");
+                summaryLabel.setStyle("-fx-text-fill: #e5b567; -fx-font-weight: bold;");
+            }
+        });
+    }
+
+    private ListCell<String> codeTypeCell() {
+        return new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText("");
+                    setDisable(false);
+                    setOpacity(1.0);
+                    setTooltip(null);
+                    setStyle("");
+                    return;
+                }
+
+                boolean tleDisabled = "TLE".equals(item) && isTleIrrelevant(problem);
+                setText(item);
+                setDisable(tleDisabled);
+                setOpacity(tleDisabled ? 0.45 : 1.0);
+                setTooltip(tleDisabled ? tleDisabledTooltip() : null);
+                setStyle(tleDisabled ? "-fx-text-fill: #8f8981;" : "");
+            }
+        };
+    }
+
+    private void updateTleOptionState() {
+        boolean disabled = isTleIrrelevant(problem);
+        if (codeTypeCombo != null) {
+            codeTypeCombo.setTooltip(disabled ? tleDisabledTooltip() : null);
+            if (disabled && "TLE".equals(codeTypeCombo.getValue())) {
+                codeTypeCombo.getSelectionModel().select("AC");
+            }
+            codeTypeCombo.requestLayout();
+        }
+    }
+
+    private boolean isTleIrrelevant(Problem problem) {
+        if (problem == null) {
+            return false;
+        }
+        if (problem.isSmallN()) {
+            return true;
+        }
+        Integer maxN = problem.getMaxConstraintN();
+        if (maxN != null && maxN < N_SMALL_THRESHOLD) {
+            return true;
+        }
+        return isSmallNProblemType(problem.getProblemType());
+    }
+
+    private boolean isSmallNProblemType(String problemType) {
+        String normalized = valueOrEmpty(problemType).trim().toUpperCase();
+        return normalized.equals("MATH_FORMULA")
+                || normalized.equals("STRING_BASIC")
+                || normalized.equals("AD_HOC_SIMPLE");
+    }
+
+    private Tooltip tleDisabledTooltip() {
+        Tooltip tooltip = new Tooltip(TLE_DISABLED_MESSAGE);
+        tooltip.setShowDelay(Duration.millis(300));
+        return tooltip;
+    }
+
+    private void showTleUnavailable() {
+        summaryLabel.setText("TLE khong kha dung cho bai nay");
+        summaryLabel.setStyle("-fx-text-fill: #e5b567; -fx-font-weight: bold;");
+        AlertUtil.showInfo(codeArea.getScene().getWindow(), TLE_DISABLED_MESSAGE);
     }
 
     @FXML

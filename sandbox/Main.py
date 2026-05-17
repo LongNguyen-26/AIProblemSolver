@@ -1,14 +1,10 @@
 import sys
 
 def main():
-    data = sys.stdin.read().strip()
-    if not data:
+    p_line = sys.stdin.readline().strip()
+    if not p_line:
         return
-    # Allow leading zeros
-    try:
-        p = int(data)
-    except ValueError:
-        return
+    p = int(p_line)
     items = [
         "Uphold integrity and ethics throughout the contest.",
         "Do not seek or receive external help from people, platforms, tools or AI.",
@@ -16,8 +12,12 @@ def main():
         "Show good sportmanship and treat competitors, volunteers, staff and judges with respect.",
         "Compete with creativity and teamwork, honor the contest spirit and pursue excellence."
     ]
+    # p is 1-indexed
     if 1 <= p <= 5:
         sys.stdout.write(items[p-1])
+    else:
+        # According to constraints this should never happen
+        pass
 
 if __name__ == "__main__":
     main()

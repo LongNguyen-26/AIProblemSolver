@@ -1,8 +1,12 @@
-from typing import Any
+import re
+from typing import Any, Optional
 
 from models.schemas import ProblemClassification, ProblemSchema
 from services.groq_json import request_json
 from services.problem_taxonomy import DEFAULT_PROBLEM_TYPE, PROBLEM_TYPES
+
+SMALL_N_THRESHOLD = 1000
+SMALL_N_PROBLEM_TYPES = {"MATH_FORMULA", "STRING_BASIC", "AD_HOC_SIMPLE"}
 
 
 CLASSIFIER_PROMPT = """
@@ -67,7 +71,47 @@ def apply_classification(problem: ProblemSchema) -> ProblemSchema:
     problem.secondary_type = classification.secondary_type or ""
     problem.type_confidence = classification.confidence
     problem.tle_strategy = _taxonomy_value(classification.primary_type, "killer_strategy")
+    return apply_tle_relevance_metadata(problem)
+
+
+def apply_tle_relevance_metadata(problem: ProblemSchema) -> ProblemSchema:
+    max_n = extract_max_n(problem.constraints or [])
+    problem.max_constraint_n = max_n
+    problem.is_small_n = (
+        (max_n is not None and max_n < SMALL_N_THRESHOLD)
+        or _is_small_n_problem_type(problem.problem_type)
+    )
     return problem
+
+
+def extract_max_n(constraints_text: str | list[str]) -> Optional[int]:
+    if isinstance(constraints_text, list):
+        text = "\n".join(str(item) for item in constraints_text if item is not None)
+    else:
+        text = str(constraints_text or "")
+    if not text.strip():
+        return None
+
+    cleaned = re.sub(r"(?<=\d)[\s,_]+(?=\d)", "", text)
+    value_pattern = (
+        r"((?:\d+\s*(?:\*|x)\s*)?10\s*\^\s*\d+|"
+        r"\d+(?:\.\d+)?(?:e\d+)?)"
+    )
+    relation = r"(?:<=|<|\\leq|\u2264)"
+    variable = r"(?:n|m|q|k|length|len)"
+    patterns = [
+        rf"\b{variable}\b\s*{relation}\s*{value_pattern}",
+        rf"\d+\s*{relation}\s*\b{variable}\b\s*{relation}\s*{value_pattern}",
+        rf"\b{variable}\b\s*(?:is\s*)?(?:at\s+most|up\s+to)\s*{value_pattern}",
+    ]
+
+    candidates: list[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, cleaned, re.IGNORECASE):
+            value = _parse_bound_value(match.group(match.lastindex or 1))
+            if value > 0:
+                candidates.append(value)
+    return max(candidates) if candidates else None
 
 
 def _keyword_classification(problem: ProblemSchema) -> ProblemClassification:
@@ -140,6 +184,25 @@ def _taxonomy_value(problem_type: str, key: str) -> str:
         return ""
     value = info.get(key, "")
     return value if isinstance(value, str) else ""
+
+
+def _is_small_n_problem_type(problem_type: str) -> bool:
+    return (problem_type or "").strip().upper() in SMALL_N_PROBLEM_TYPES
+
+
+def _parse_bound_value(value: str) -> int:
+    text = (value or "").replace(" ", "").replace(",", "").replace("_", "").lower()
+    text = text.replace("x", "*")
+    try:
+        if "e" in text:
+            return int(float(text))
+        power_match = re.fullmatch(r"(?:(\d+)\*)?10\^(\d+)", text)
+        if power_match:
+            factor = int(power_match.group(1) or "1")
+            return factor * (10 ** int(power_match.group(2)))
+        return int(float(text))
+    except Exception:
+        return 0
 
 
 def _float_value(value: Any, fallback: float) -> float:
