@@ -1,7 +1,0 @@
-Stress Testing vẫn chưa hoạt động
-Chưa sinh đủ loại Test-case cần
-Có lỗi hay không vẫn dựa vào may mắn.
-=> Cải thiện: không bao giờ được báo lỗi khi Phan tich de, ảnh hưởng UX => Đảm bảo stress testing hoạt động, sinh đủ loại test-case, và test-case phải đủ mạnh. Tham khảo thêm các logic của các nền tảng Lập trình thi đấu, hoặc Online Judge.
-- Vấn đề của việc sinh code WA nhưng vẫn pass AC: là do prompt sinh code WA yếu??
-
-Giai đoạn sinh KILLER testcases khá lâu, nhưng có % cao là không sinh ra đc KILLER testcase nào cả.
