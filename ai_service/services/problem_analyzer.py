@@ -1,5 +1,6 @@
 from models.schemas import ProblemSchema
 from services.groq_json import request_json
+from services.problem_classifier import apply_classification
 
 
 ANALYZE_SYSTEM_PROMPT = """
@@ -25,4 +26,4 @@ def analyze_problem(text: str) -> ProblemSchema:
             {"role": "user", "content": f"Analyze this problem:\n\n{text}"},
         ]
     )
-    return ProblemSchema(**data)
+    return apply_classification(ProblemSchema(**data))

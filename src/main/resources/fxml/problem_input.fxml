@@ -50,6 +50,22 @@
                   GridPane.columnIndex="1"
                   GridPane.hgrow="ALWAYS"
                   GridPane.rowIndex="2"/>
+
+        <Label text="Problem type:" GridPane.columnIndex="0" GridPane.rowIndex="3"/>
+        <TextField fx:id="problemTypeField"
+                   editable="false"
+                   GridPane.columnIndex="1"
+                   GridPane.hgrow="ALWAYS"
+                   GridPane.rowIndex="3"/>
+
+        <Label text="TLE strategy:" GridPane.columnIndex="0" GridPane.rowIndex="4"/>
+        <TextArea fx:id="tleStrategyArea"
+                  editable="false"
+                  prefRowCount="2"
+                  wrapText="true"
+                  GridPane.columnIndex="1"
+                  GridPane.hgrow="ALWAYS"
+                  GridPane.rowIndex="4"/>
     </GridPane>
 
     <Label text="Constraints:" styleClass="field-label"/>

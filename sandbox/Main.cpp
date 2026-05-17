@@ -8,37 +8,47 @@ int main(){
     while(T--){
         int n;cin>>n;
         vector<long long> t(n), v(n);
-        long long maxT=0;
-        for(int i=0;i<n;i++){
-            cin>>t[i]>>v[i];
-            maxT=max(maxT,t[i]);
+        for(int i=0;i<n;i++) cin>>t[i]>>v[i];
+        // sort indices by deadline
+        vector<int> idx(n);
+        iota(idx.begin(), idx.end(), 0);
+        sort(idx.begin(), idx.end(), [&](int a,int b){return t[a]<t[b];});
+        // max-heap of (current value, id)
+        priority_queue<pair<long long,int>> pq;
+        vector<char> expired(n,0);
+        for(int i=0;i<n;i++) pq.emplace(v[i], i);
+        long long cur=0;
+        size_t pos=0; // next deadline index in idx
+        while(!pq.empty()){
+            // skip expired tops
+            while(!pq.empty() && expired[pq.top().second]) pq.pop();
+            if(pq.empty()) break;
+            long long next_dead = (pos<idx.size()? t[idx[pos]] : LLONG_MAX);
+            long long delta = next_dead - cur;
+            if(delta<=0){
+                // process all deadlines equal to cur
+                while(pos<idx.size() && t[idx[pos]]==cur){
+                    expired[idx[pos]]=1;
+                    ++pos;
+                }
+                continue;
+            }
+            // allocate all delta to the current best balloon
+            auto top = pq.top(); pq.pop();
+            int id = top.second;
+            v[id] += delta;
+            cur = next_dead;
+            // push back with updated value
+            pq.emplace(v[id], id);
+            // now remove all balloons whose deadline is cur
+            while(pos<idx.size() && t[idx[pos]]==cur){
+                expired[idx[pos]]=1;
+                ++pos;
+            }
         }
-        // events: at each time we add balloons whose deadline > current time
-        vector<vector<int>> add(maxT+2);
-        for(int i=0;i<n;i++){
-            // balloon i is available for times [0, t[i)-1]
-            add[0].push_back(i);
-        }
-        // priority queue of pair(current amount, index) max by current amount
-        struct Node{ long long cur; int idx;};
-        struct Cmp{ bool operator()(const Node&a,const Node&b) const{ return a.cur<b.cur; } };
-        priority_queue<Node, vector<Node>, Cmp> pq;
-        // we will push all balloons at start, but need to remove when deadline passes.
-        // To handle removal, store deadline and skip when popped if expired.
-        vector<long long> cur(v.begin(), v.end());
-        for(int i=0;i<n;i++) pq.push({cur[i], i});
-        long long total=0;
-        for(long long time=0; time<maxT; ++time){
-            // pop expired balloons
-            while(!pq.empty() && t[pq.top().idx]<=time) pq.pop();
-            if(pq.empty()) continue;
-            Node top=pq.top(); pq.pop();
-            // blow one liter into this balloon
-            cur[top.idx]++;
-            pq.push({cur[top.idx], top.idx});
-        }
-        for(int i=0;i<n;i++) total+=cur[i]*cur[i];
-        cout<<total<<"\n";
+        long long ans=0;
+        for(int i=0;i<n;i++) ans += v[i]*v[i];
+        cout<<ans<<"\n";
     }
     return 0;
 }

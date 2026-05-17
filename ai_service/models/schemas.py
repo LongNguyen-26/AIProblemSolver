@@ -11,6 +11,17 @@ class ProblemSchema(BaseModel):
     constraints: List[str] = Field(default_factory=list)
     sample_inputs: List[str] = Field(default_factory=list)
     sample_outputs: List[str] = Field(default_factory=list)
+    problem_type: str = ""
+    secondary_type: str = ""
+    type_confidence: float = 0.0
+    tle_strategy: str = ""
+
+
+class ProblemClassification(BaseModel):
+    primary_type: str = "ARRAY_SEQUENCE"
+    secondary_type: str = ""
+    confidence: float = 0.0
+    reasoning: str = ""
 
 
 class TestCaseSchema(BaseModel):

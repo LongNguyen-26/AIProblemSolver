@@ -4,6 +4,8 @@ from typing import Any, Iterable
 
 from models.schemas import ProblemSchema, TestCaseResponse, TestCaseSchema
 from services.groq_json import request_json, request_text
+from services.problem_classifier import classify_problem_fast
+from services.problem_taxonomy import type_strategy
 
 
 DEFAULT_CHECKER_CODE = """# Python checker
@@ -87,6 +89,7 @@ def _generate_json_testcases(
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
     profile_guidance = _profile_guidance(profile)
+    type_context = _problem_type_context(problem, profile)
     existing_inputs_guidance = _existing_inputs_guidance(existing_inputs or [], profile)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
@@ -104,6 +107,7 @@ Each test case must be a complete standalone stdin for one program run. If the
 format has a leading t/T number of test cases, make that number consistent with
 the scenarios included in that one stdin.
 {profile_guidance}
+{type_context}
 {existing_inputs_guidance}
 If official samples are included, they count toward {count}; fill all remaining
 slots with newly generated, distinct inputs.
@@ -113,7 +117,7 @@ Return ONLY valid JSON with this structure:
   "testcases": [
     {{
       "input_lines": ["..."],
-      "description": "...",
+      "description": "... name the profile and the type-specific edge/killer pattern targeted ...",
       "is_edge_case": false
     }}
   ]
@@ -136,6 +140,7 @@ def _generate_text_testcases(
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
     profile_guidance = _profile_guidance(profile)
+    type_context = _problem_type_context(problem, profile)
     existing_inputs_guidance = _existing_inputs_guidance(existing_inputs or [], profile)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
@@ -153,6 +158,7 @@ Each test case must be a complete standalone stdin for one program run. If the
 format has a leading t/T number of test cases, make that number consistent with
 the scenarios included in that one stdin.
 {profile_guidance}
+{type_context}
 {existing_inputs_guidance}
 If official samples are included, they count toward {count}; fill all remaining
 slots with newly generated, distinct inputs.
@@ -166,6 +172,7 @@ full stdin here
 ###END
 
 Do not use JSON. Do not use markdown fences.
+The DESC line must name the profile and the type-specific edge/killer pattern targeted.
 """
     content = request_text([{"role": "user", "content": prompt}])
     return _parse_text_cases(content, count)
@@ -224,6 +231,42 @@ def _existing_inputs_guidance(existing_inputs: list[str], profile: str) -> str:
         lines.append(f"... and {remaining} more existing inputs.")
     lines.append(f"Generate NEW and DISTINCT inputs for profile {profile}.")
     return "\n".join(lines)
+
+
+def _problem_type_context(problem: ProblemSchema, profile: str) -> str:
+    classification = classify_problem_fast(problem)
+    strategy = type_strategy(classification.primary_type)
+    edge_cases = "\n".join(f"- {value}" for value in strategy["edge_cases"])
+    profile_value = (profile or "SMALL").upper()
+    if profile_value == "KILLER":
+        priority = (
+            "For KILLER tests, prioritize the killer strategy and mention it in each description."
+        )
+    elif profile_value == "MEDIUM":
+        priority = (
+            "For MEDIUM tests, mix normal cases with the type-specific edge cases below."
+        )
+    else:
+        priority = (
+            "For SMALL tests, include several of the type-specific edge cases below and "
+            "mention the chosen edge pattern in each description."
+        )
+
+    return f"""
+Problem type classification:
+- Primary type: {classification.primary_type}
+- Secondary type: {classification.secondary_type or "none"}
+- Confidence: {classification.confidence:.2f}
+- Input generator approach: {strategy["input_generator_hint"]}
+
+Type-specific edge cases:
+{edge_cases}
+
+Killer test strategy:
+- {strategy["killer_strategy"]}
+
+{priority}
+"""
 
 
 def _normalize_testcases(raw_cases: list[Any], count: int) -> list[TestCaseSchema]:

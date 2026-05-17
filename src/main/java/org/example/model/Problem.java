@@ -16,6 +16,14 @@ public class Problem {
     private List<String> sampleInputs;
     @SerializedName("sample_outputs")
     private List<String> sampleOutputs;
+    @SerializedName("problem_type")
+    private String problemType;
+    @SerializedName("secondary_type")
+    private String secondaryType;
+    @SerializedName("type_confidence")
+    private double typeConfidence;
+    @SerializedName("tle_strategy")
+    private String tleStrategy;
 
     public Problem() {
     }
@@ -74,6 +82,38 @@ public class Problem {
 
     public void setSampleOutputs(List<String> sampleOutputs) {
         this.sampleOutputs = sampleOutputs;
+    }
+
+    public String getProblemType() {
+        return problemType;
+    }
+
+    public void setProblemType(String problemType) {
+        this.problemType = problemType;
+    }
+
+    public String getSecondaryType() {
+        return secondaryType;
+    }
+
+    public void setSecondaryType(String secondaryType) {
+        this.secondaryType = secondaryType;
+    }
+
+    public double getTypeConfidence() {
+        return typeConfidence;
+    }
+
+    public void setTypeConfidence(double typeConfidence) {
+        this.typeConfidence = typeConfidence;
+    }
+
+    public String getTleStrategy() {
+        return tleStrategy;
+    }
+
+    public void setTleStrategy(String tleStrategy) {
+        this.tleStrategy = tleStrategy;
     }
 
     @Override
