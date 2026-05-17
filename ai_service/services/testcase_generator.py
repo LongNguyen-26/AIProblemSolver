@@ -1,3 +1,8 @@
+import ast
+import subprocess
+import sys
+import tempfile
+import textwrap
 import uuid
 import re
 from typing import Any, Iterable
@@ -14,10 +19,60 @@ def check(input_data, expected, actual):
 """
 
 MAX_TESTCASE_INPUT_CHARS = 200000
+MAX_KILLER_SCRIPT_OUTPUT_CHARS = 1500000
+MAX_KILLER_SCRIPT_CHARS = 6000
+KILLER_SCRIPT_TIMEOUT_SECONDS = 8
+SCRIPT_KILLER_MIN_BOUND = 5000
 MAX_GENERATION_ATTEMPTS = 3
 MAX_EXISTING_INPUTS_IN_PROMPT = 20
 MAX_EXISTING_INPUT_CHARS_IN_PROMPT = 1000
 MAX_KILLER_STRATEGY_BUFFER = 2
+ALLOWED_KILLER_SCRIPT_IMPORTS = {"collections", "itertools", "math", "random", "sys"}
+BLOCKED_KILLER_SCRIPT_NAMES = {
+    "__import__",
+    "breakpoint",
+    "compile",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "input",
+    "locals",
+    "open",
+    "setattr",
+    "vars",
+}
+BLOCKED_KILLER_SCRIPT_ATTRIBUTES = {
+    "__stdout__",
+    "__stderr__",
+    "stdin",
+    "system",
+    "popen",
+    "remove",
+    "unlink",
+    "rmdir",
+    "removedirs",
+    "rmtree",
+    "rename",
+    "replace",
+    "mkdir",
+    "makedirs",
+}
+
+KILLER_SCRIPT_SYSTEM_PROMPT = """
+You are an expert competitive-programming test data generator.
+Write a short standalone Python script that prints exactly one large KILLER
+stdin instance for the target problem.
+
+Strict rules:
+- Use only these imports if needed: random, math, sys, itertools, collections.
+- Do not read stdin. Do not call input(), sys.stdin, open(), eval(), exec(),
+  compile(), subprocess, socket, requests, urllib, pathlib, shutil, or importlib.
+- Print only the generated stdin to stdout.
+- Finish quickly and keep stdout under the requested character limit.
+- Return only Python source code. No markdown fences and no explanation.
+- Start with one comment: # KILLER: <short strategy>.
+"""
 
 KILLER_STRATEGIES = {
     "ARRAY_SEQUENCE": [
@@ -231,6 +286,22 @@ def generate_single_killer_case(
     strategy: str,
     existing_inputs: list[str] | None = None,
 ) -> TestCaseSchema | None:
+    if _should_generate_killer_via_script(problem):
+        scripted = _generate_single_killer_case_via_script(
+            problem,
+            strategy,
+            existing_inputs or [],
+        )
+        if scripted:
+            return scripted
+    return _generate_single_killer_case_direct(problem, strategy, existing_inputs)
+
+
+def _generate_single_killer_case_direct(
+    problem: ProblemSchema,
+    strategy: str,
+    existing_inputs: list[str] | None = None,
+) -> TestCaseSchema | None:
     existing_keys = _input_key_set(existing_inputs or [])
     classification = classify_problem_fast(problem)
     max_n = _extract_max_n(problem.constraints or [])
@@ -282,6 +353,180 @@ Generate the killer test case now:
         description=f"[KILLER] {strategy}",
         is_edge_case=True,
     )
+
+
+def _generate_single_killer_case_via_script(
+    problem: ProblemSchema,
+    strategy: str,
+    existing_inputs: list[str],
+) -> TestCaseSchema | None:
+    existing_keys = _input_key_set(existing_inputs or [])
+    script = generate_killer_script(problem, strategy)
+    if not script:
+        return None
+    try:
+        input_text = _run_killer_script(script).strip()
+    except Exception:
+        return None
+
+    if not _is_usable_input(input_text, MAX_KILLER_SCRIPT_OUTPUT_CHARS):
+        return None
+    if _input_key(input_text) in existing_keys:
+        return None
+
+    return TestCaseSchema(
+        id=_new_id(),
+        input=input_text,
+        expected_output="",
+        description=f"[KILLER] script-generated: {strategy}",
+        is_edge_case=True,
+    )
+
+
+def generate_killer_script(problem: ProblemSchema, strategy: str) -> str | None:
+    classification = classify_problem_fast(problem)
+    prompt = f"""
+Problem title: {problem.title or "Competitive programming problem"}
+Problem type: {classification.primary_type}
+
+Description:
+{(problem.description or "")[:1200]}
+
+Input format:
+{(problem.input_format or "Infer from the statement.")[:800]}
+
+Output format:
+{(problem.output_format or "")[:400]}
+
+Constraints:
+{_constraint_text(problem)[:1200]}
+
+KILLER strategy:
+{strategy}
+
+Write one Python script that prints a valid stdin instance following the input
+format. Prefer maximum-size values and adversarial patterns that expose O(n^2),
+O(n*m), recursion-depth, or naive per-query algorithms. Keep stdout under
+{MAX_KILLER_SCRIPT_OUTPUT_CHARS} characters.
+"""
+    try:
+        script = _strip_code_fence(
+            request_text(
+                [
+                    {"role": "system", "content": KILLER_SCRIPT_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+        ).strip()
+    except Exception:
+        return None
+
+    if not _is_safe_killer_script(script):
+        return None
+    return script
+
+
+def _should_generate_killer_via_script(problem: ProblemSchema) -> bool:
+    return _extract_max_n(problem.constraints or []) >= SCRIPT_KILLER_MIN_BOUND
+
+
+def _is_safe_killer_script(script: str) -> bool:
+    if not script or len(script) > MAX_KILLER_SCRIPT_CHARS:
+        return False
+    lowered = script.lower()
+    if "sys.stdin" in lowered or "subprocess" in lowered:
+        return False
+    try:
+        tree = ast.parse(script)
+    except SyntaxError:
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _module_root(alias.name) not in ALLOWED_KILLER_SCRIPT_IMPORTS:
+                    return False
+        elif isinstance(node, ast.ImportFrom):
+            if not node.module or _module_root(node.module) not in ALLOWED_KILLER_SCRIPT_IMPORTS:
+                return False
+            if any(alias.name in BLOCKED_KILLER_SCRIPT_ATTRIBUTES for alias in node.names):
+                return False
+        elif isinstance(node, ast.Call):
+            if _called_name(node.func) in BLOCKED_KILLER_SCRIPT_NAMES:
+                return False
+        elif isinstance(node, ast.Name):
+            if node.id in BLOCKED_KILLER_SCRIPT_NAMES:
+                return False
+        elif isinstance(node, ast.Attribute):
+            if node.attr in BLOCKED_KILLER_SCRIPT_ATTRIBUTES:
+                return False
+    return True
+
+
+def _run_killer_script(script: str) -> str:
+    wrapper = textwrap.dedent(
+        """
+        import runpy
+        import sys
+
+        class CappedStdout:
+            def __init__(self, limit):
+                self.limit = limit
+                self.size = 0
+                self.parts = []
+
+            def write(self, value):
+                text = str(value)
+                self.size += len(text)
+                if self.size > self.limit:
+                    raise RuntimeError("stdout limit exceeded")
+                self.parts.append(text)
+                return len(text)
+
+            def flush(self):
+                pass
+
+        cap = CappedStdout(int(sys.argv[2]))
+        sys.stdout = cap
+        runpy.run_path(sys.argv[1], run_name="__main__")
+        sys.__stdout__.write("".join(cap.parts))
+        """
+    )
+    with tempfile.TemporaryDirectory(prefix="killer_gen_") as temp_dir:
+        script_path = f"{temp_dir}/generator.py"
+        with open(script_path, "w", encoding="utf-8") as handle:
+            handle.write(script)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                wrapper,
+                script_path,
+                str(MAX_KILLER_SCRIPT_OUTPUT_CHARS),
+            ],
+            cwd=temp_dir,
+            input="",
+            text=True,
+            capture_output=True,
+            timeout=KILLER_SCRIPT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or "killer script failed").strip())
+    return (completed.stdout or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _module_root(module_name: str) -> str:
+    return (module_name or "").split(".", 1)[0]
+
+
+def _called_name(func: ast.AST) -> str:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
 
 
 def _generate_json_testcases(
@@ -429,13 +674,16 @@ def _constraint_text(problem: ProblemSchema) -> str:
 def _extract_max_n(constraints: list[str]) -> int:
     best = 0
     for constraint in constraints or []:
-        text = str(constraint).replace(",", "")
+        text = re.sub(r"(?<=\d)[ \t,_]+(?=\d)", "", str(constraint))
         value_pattern = r"((?:\d+\s*(?:\*|x)\s*)?10\s*\^\s*\d+|\d+(?:e\d+)?)"
+        variable = (
+            r"(?:n|m|q|k|t|p|r|c|h|w|row|rows|col|cols|column|columns|"
+            r"length|len|size|vertices|edges)"
+        )
+        relation = r"(?:<=|<|\\leq|\u2264)"
         patterns = [
-            rf"\bn\s*(?:<=|<)\s*{value_pattern}",
-            rf"\bN\s*(?:<=|<)\s*{value_pattern}",
-            rf"1\s*<=\s*n\s*<=\s*{value_pattern}",
-            rf"1\s*<=\s*N\s*<=\s*{value_pattern}",
+            rf"\b{variable}\b\s*{relation}\s*{value_pattern}",
+            rf"\d+\s*{relation}\s*\b{variable}\b\s*{relation}\s*{value_pattern}",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -721,8 +969,8 @@ This is the SAMPLE/SMALL stress-validation phase. Keep every input suitable for 
 """
 
 
-def _is_usable_input(value: str) -> bool:
-    return bool(value and value.strip() and len(value) <= MAX_TESTCASE_INPUT_CHARS)
+def _is_usable_input(value: str, max_chars: int = MAX_TESTCASE_INPUT_CHARS) -> bool:
+    return bool(value and value.strip() and len(value) <= max_chars)
 
 
 def _string_value(value: Any) -> str:

@@ -435,13 +435,16 @@ def _killer_strategies_for_problem(problem: ProblemSchema) -> list[str]:
 def _extract_max_n(constraints: list[str]) -> int:
     best = 0
     for constraint in constraints or []:
-        text = str(constraint).replace(",", "")
+        text = re.sub(r"(?<=\d)[ \t,_]+(?=\d)", "", str(constraint))
         value_pattern = r"((?:\d+\s*(?:\*|x)\s*)?10\s*\^\s*\d+|\d+(?:e\d+)?)"
+        variable = (
+            r"(?:n|m|q|k|t|p|r|c|h|w|row|rows|col|cols|column|columns|"
+            r"length|len|size|vertices|edges)"
+        )
+        relation = r"(?:<=|<|\\leq|\u2264)"
         for pattern in (
-            rf"\bn\s*(?:<=|<)\s*{value_pattern}",
-            rf"\bN\s*(?:<=|<)\s*{value_pattern}",
-            rf"1\s*<=\s*n\s*<=\s*{value_pattern}",
-            rf"1\s*<=\s*N\s*<=\s*{value_pattern}",
+            rf"\b{variable}\b\s*{relation}\s*{value_pattern}",
+            rf"\d+\s*{relation}\s*\b{variable}\b\s*{relation}\s*{value_pattern}",
         ):
             match = re.search(pattern, text, re.IGNORECASE)
             if match:

@@ -103,13 +103,16 @@ def extract_max_n(constraints_text: str | list[str]) -> Optional[int]:
     if not text.strip():
         return None
 
-    cleaned = re.sub(r"(?<=\d)[\s,_]+(?=\d)", "", text)
+    cleaned = re.sub(r"(?<=\d)[ \t,_]+(?=\d)", "", text)
     value_pattern = (
         r"((?:\d+\s*(?:\*|x)\s*)?10\s*\^\s*\d+|"
         r"\d+(?:\.\d+)?(?:e\d+)?)"
     )
     relation = r"(?:<=|<|\\leq|\u2264)"
-    variable = r"(?:[a-z][a-z0-9_]*|length|len)"
+    variable = (
+        r"(?:n|m|q|k|t|p|r|c|h|w|row|rows|col|cols|column|columns|"
+        r"length|len|size|vertices|edges)"
+    )
     patterns = [
         rf"\b{variable}\b\s*{relation}\s*{value_pattern}",
         rf"\d+\s*{relation}\s*\b{variable}\b\s*{relation}\s*{value_pattern}",
