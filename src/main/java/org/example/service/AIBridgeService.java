@@ -12,10 +12,14 @@ import org.example.util.HttpUtil;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class AIBridgeService {
+    private static final int MAX_TESTCASE_ATTEMPTS = 3;
+
     private final String baseUrl;
     private final Gson gson = new Gson();
 
@@ -60,11 +64,67 @@ public class AIBridgeService {
     public List<TestCase> generateTestCases(Problem problem, int count,
                                             boolean includeEdgeCases,
                                             String profile) throws Exception {
+        return generateTestCases(problem, count, includeEdgeCases, profile, List.of());
+    }
+
+    public List<TestCase> generateTestCases(Problem problem, int count,
+                                            boolean includeEdgeCases,
+                                            String profile,
+                                            List<String> existingInputs) throws Exception {
+        if (count <= 0) {
+            return List.of();
+        }
+
+        String normalizedProfile = profile == null || profile.isBlank() ? "SMALL" : profile;
+        List<TestCase> result = new ArrayList<>();
+        List<String> avoidInputs = new ArrayList<>(
+                existingInputs == null ? List.of() : existingInputs
+        );
+        Set<String> seenInputs = inputKeySet(avoidInputs);
+
+        int attempts = 0;
+        while (result.size() < count && attempts < MAX_TESTCASE_ATTEMPTS) {
+            int missing = count - result.size();
+            List<TestCase> batch = callTestcaseEndpoint(
+                    problem,
+                    missing,
+                    includeEdgeCases,
+                    normalizedProfile,
+                    avoidInputs
+            );
+
+            for (TestCase testCase : batch) {
+                if (testCase == null) {
+                    continue;
+                }
+                String key = inputKey(testCase.getInput());
+                if (key.isBlank() || seenInputs.contains(key)) {
+                    continue;
+                }
+                result.add(testCase);
+                seenInputs.add(key);
+                avoidInputs.add(testCase.getInput());
+                if (result.size() >= count) {
+                    break;
+                }
+            }
+            attempts++;
+        }
+
+        return new ArrayList<>(result.subList(0, Math.min(result.size(), count)));
+    }
+
+    private List<TestCase> callTestcaseEndpoint(Problem problem, int count,
+                                                boolean includeEdgeCases,
+                                                String profile,
+                                                List<String> existingInputs) throws Exception {
         Map<String, Object> body = new HashMap<>();
         body.put("problem", problem);
         body.put("count", count);
+        body.put("requested_count", count);
         body.put("include_edge_cases", includeEdgeCases);
         body.put("profile", profile == null || profile.isBlank() ? "SMALL" : profile);
+        body.put("existing_inputs", existingInputs == null ? List.of() : existingInputs);
 
         JsonObject response = HttpUtil.postJson(baseUrl + "/testcase", body, JsonObject.class);
         JsonArray testCaseArray = response.getAsJsonArray("testcases");
@@ -76,6 +136,41 @@ public class AIBridgeService {
             testCases.add(gson.fromJson(element, TestCase.class));
         }
         return testCases;
+    }
+
+    private Set<String> inputKeySet(List<String> values) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (String value : values == null ? List.<String>of() : values) {
+            String key = inputKey(value);
+            if (!key.isBlank()) {
+                keys.add(key);
+            }
+        }
+        return keys;
+    }
+
+    private String inputKey(String value) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = value.replace("\r\n", "\n").replace('\r', '\n');
+        String[] lines = normalized.split("\n", -1);
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) {
+                builder.append('\n');
+            }
+            builder.append(stripTrailingWhitespace(lines[i]));
+        }
+        return builder.toString().strip();
+    }
+
+    private String stripTrailingWhitespace(String value) {
+        int end = value.length();
+        while (end > 0 && Character.isWhitespace(value.charAt(end - 1))) {
+            end--;
+        }
+        return value.substring(0, end);
     }
 
     public CodeSubmission generateCode(Problem problem, String type,

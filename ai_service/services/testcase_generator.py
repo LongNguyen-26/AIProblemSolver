@@ -1,6 +1,6 @@
 import uuid
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from models.schemas import ProblemSchema, TestCaseResponse, TestCaseSchema
 from services.groq_json import request_json, request_text
@@ -12,6 +12,9 @@ def check(input_data, expected, actual):
 """
 
 MAX_TESTCASE_INPUT_CHARS = 200000
+MAX_GENERATION_ATTEMPTS = 3
+MAX_EXISTING_INPUTS_IN_PROMPT = 20
+MAX_EXISTING_INPUT_CHARS_IN_PROMPT = 1000
 
 
 def generate_testcases(
@@ -19,50 +22,81 @@ def generate_testcases(
     count: int,
     include_edge_cases: bool,
     profile: str = "SMALL",
+    existing_inputs: list[str] | None = None,
 ) -> TestCaseResponse:
     requested_count = max(1, min(count, 50))
     normalized_profile = _normalize_profile(profile)
+    collected: list[TestCaseSchema] = []
+    seen_inputs = _input_key_set(existing_inputs or [])
 
-    try:
-        testcases = _generate_json_testcases(
-            problem, requested_count, include_edge_cases, normalized_profile
-        )
-        if testcases:
-            return TestCaseResponse(
-                testcases=testcases,
-                checker_code=DEFAULT_CHECKER_CODE,
-            )
-    except Exception:
-        pass
+    for _ in range(MAX_GENERATION_ATTEMPTS):
+        still_needed = requested_count - len(collected)
+        if still_needed <= 0:
+            break
 
-    try:
-        testcases = _generate_text_testcases(
-            problem, requested_count, include_edge_cases, normalized_profile
-        )
-        if testcases:
-            return TestCaseResponse(
-                testcases=testcases,
-                checker_code=DEFAULT_CHECKER_CODE,
+        avoid_inputs = list(seen_inputs)
+        generated: list[TestCaseSchema] = []
+        try:
+            generated = _generate_json_testcases(
+                problem,
+                still_needed,
+                include_edge_cases,
+                normalized_profile,
+                avoid_inputs,
             )
-    except Exception:
-        pass
+        except Exception:
+            pass
+
+        _append_unique_testcases(collected, generated, seen_inputs)
+        still_needed = requested_count - len(collected)
+        if still_needed <= 0:
+            break
+
+        try:
+            generated = _generate_text_testcases(
+                problem,
+                still_needed,
+                include_edge_cases,
+                normalized_profile,
+                list(seen_inputs),
+            )
+            _append_unique_testcases(collected, generated, seen_inputs)
+        except Exception:
+            pass
+
+    if len(collected) < requested_count:
+        fallback_cases = _sample_fallback_testcases(
+            problem,
+            requested_count - len(collected),
+            seen_inputs,
+        )
+        _append_unique_testcases(collected, fallback_cases, seen_inputs)
 
     return TestCaseResponse(
-        testcases=_sample_fallback_testcases(problem, requested_count),
+        testcases=collected[:requested_count],
         checker_code=DEFAULT_CHECKER_CODE,
     )
 
 
 def _generate_json_testcases(
-    problem: ProblemSchema, count: int, include_edge_cases: bool, profile: str
+    problem: ProblemSchema,
+    count: int,
+    include_edge_cases: bool,
+    profile: str,
+    existing_inputs: list[str] | None = None,
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
     profile_guidance = _profile_guidance(profile)
+    existing_inputs_guidance = _existing_inputs_guidance(existing_inputs or [], profile)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
 
 Problem:
 {problem.model_dump_json(indent=2)}
+
+CRITICAL: You MUST return EXACTLY {count} test cases in the JSON array.
+If you cannot think of {count} distinct cases, generate valid variations with
+different inputs. Never return fewer than {count} items.
 
 Generate exactly {count} unique test cases{edge_case_text}.
 Generate valid stdin inputs only. Do not compute expected outputs.
@@ -70,9 +104,9 @@ Each test case must be a complete standalone stdin for one program run. If the
 format has a leading t/T number of test cases, make that number consistent with
 the scenarios included in that one stdin.
 {profile_guidance}
+{existing_inputs_guidance}
 If official samples are included, they count toward {count}; fill all remaining
-slots with newly generated, distinct inputs. Do not return fewer than {count}
-unless the input format is impossible to infer.
+slots with newly generated, distinct inputs.
 
 Return ONLY valid JSON with this structure:
 {{
@@ -94,15 +128,24 @@ Do not put newline characters inside JSON string values. Use input_lines arrays 
 
 
 def _generate_text_testcases(
-    problem: ProblemSchema, count: int, include_edge_cases: bool, profile: str
+    problem: ProblemSchema,
+    count: int,
+    include_edge_cases: bool,
+    profile: str,
+    existing_inputs: list[str] | None = None,
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
     profile_guidance = _profile_guidance(profile)
+    existing_inputs_guidance = _existing_inputs_guidance(existing_inputs or [], profile)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
 
 Problem:
 {problem.model_dump_json(indent=2)}
+
+CRITICAL: You MUST return EXACTLY {count} test cases.
+If you cannot think of {count} distinct cases, generate valid variations with
+different inputs. Never return fewer than {count} items.
 
 Generate exactly {count} unique test cases{edge_case_text}.
 Generate valid stdin inputs only. Do not compute expected outputs.
@@ -110,9 +153,9 @@ Each test case must be a complete standalone stdin for one program run. If the
 format has a leading t/T number of test cases, make that number consistent with
 the scenarios included in that one stdin.
 {profile_guidance}
+{existing_inputs_guidance}
 If official samples are included, they count toward {count}; fill all remaining
-slots with newly generated, distinct inputs. Do not return fewer than {count}
-unless the input format is impossible to infer.
+slots with newly generated, distinct inputs.
 
 Return only this plain text format, repeated once per test case:
 ###CASE
@@ -133,6 +176,54 @@ def _raw_testcases(data: dict[str, Any]) -> list[Any]:
     if isinstance(raw_cases, dict):
         raw_cases = list(raw_cases.values())
     return raw_cases if isinstance(raw_cases, list) else []
+
+
+def _append_unique_testcases(
+    collected: list[TestCaseSchema],
+    candidates: list[TestCaseSchema],
+    seen_inputs: set[str],
+) -> None:
+    for candidate in candidates or []:
+        key = _input_key(candidate.input)
+        if not key or key in seen_inputs:
+            continue
+        collected.append(candidate)
+        seen_inputs.add(key)
+
+
+def _input_key_set(values: Iterable[str]) -> set[str]:
+    return {key for key in (_input_key(value) for value in values or []) if key}
+
+
+def _input_key(value: str) -> str:
+    if not value:
+        return ""
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
+    return normalized.strip()
+
+
+def _existing_inputs_guidance(existing_inputs: list[str], profile: str) -> str:
+    unique_inputs = list(dict.fromkeys(_input_key(value) for value in existing_inputs))
+    unique_inputs = [value for value in unique_inputs if value]
+    if not unique_inputs:
+        return ""
+
+    shown = unique_inputs[:MAX_EXISTING_INPUTS_IN_PROMPT]
+    lines = [
+        "Already generated inputs (DO NOT repeat these):",
+    ]
+    for index, input_text in enumerate(shown, start=1):
+        clipped = input_text
+        if len(clipped) > MAX_EXISTING_INPUT_CHARS_IN_PROMPT:
+            clipped = clipped[:MAX_EXISTING_INPUT_CHARS_IN_PROMPT] + "\n..."
+        lines.append(f"{index}. {clipped}")
+
+    remaining = len(unique_inputs) - len(shown)
+    if remaining > 0:
+        lines.append(f"... and {remaining} more existing inputs.")
+    lines.append(f"Generate NEW and DISTINCT inputs for profile {profile}.")
+    return "\n".join(lines)
 
 
 def _normalize_testcases(raw_cases: list[Any], count: int) -> list[TestCaseSchema]:
@@ -204,12 +295,17 @@ def _parse_text_cases(content: str, count: int) -> list[TestCaseSchema]:
 
 
 def _sample_fallback_testcases(
-    problem: ProblemSchema, count: int
+    problem: ProblemSchema, count: int, seen_inputs: set[str] | None = None
 ) -> list[TestCaseSchema]:
     testcases: list[TestCaseSchema] = []
+    seen = set(seen_inputs or set())
     for index, sample_input in enumerate(problem.sample_inputs or []):
         if not _is_usable_input(sample_input):
             continue
+        key = _input_key(sample_input)
+        if not key or key in seen:
+            continue
+        seen.add(key)
         testcases.append(
             TestCaseSchema(
                 id=_new_id(),

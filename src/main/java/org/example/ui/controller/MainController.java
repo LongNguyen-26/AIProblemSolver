@@ -720,9 +720,10 @@ public class MainController implements Initializable {
             List<TestCase> next = sanitizeTestCases(
                     aiService.generateTestCases(
                             problem,
-                            Math.max(missing, count),
+                            missing,
                             includeEdgeCases,
-                            profile
+                            profile,
+                            inputsOf(collected)
                     )
             );
             collected = mergeUniqueCases(collected, next);

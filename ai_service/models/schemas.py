@@ -33,8 +33,10 @@ class AnalyzeResponse(BaseModel):
 class TestCaseRequest(BaseModel):
     problem: ProblemSchema
     count: int = 10
+    requested_count: Optional[int] = None
     include_edge_cases: bool = True
     profile: str = "SMALL"
+    existing_inputs: List[str] = Field(default_factory=list)
 
 
 class TestCaseResponse(BaseModel):
