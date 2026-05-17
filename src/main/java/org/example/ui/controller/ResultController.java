@@ -19,6 +19,7 @@ import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.stage.FileChooser;
 import org.example.model.AnalysisReport;
 import org.example.model.CodeSubmission;
+import org.example.model.ComplexityInfo;
 import org.example.model.Problem;
 import org.example.model.TestCase;
 import org.example.service.AIBridgeService;
@@ -38,8 +39,7 @@ import java.util.concurrent.CompletableFuture;
 
 public class ResultController implements Initializable {
     private static final int TLE_GENERATION_ATTEMPTS = 3;
-    private static final int MAX_TLE_VALIDATION_CASES = 16;
-    private static final int MAX_TLE_VALIDATION_KILLER_CASES = 5;
+    private static final int MAX_TLE_VALIDATION_CASES = 3;
 
     @FXML private ComboBox<String> codeTypeCombo;
     @FXML private ComboBox<String> languageCombo;
@@ -173,13 +173,16 @@ public class ResultController implements Initializable {
 
         String lastFailure = "";
         List<TestCase> promptCases = promptValidationCases(validationCases);
+        ComplexityInfo complexityInfo = analyzeComplexityForTle();
         for (int attempt = 1; attempt <= TLE_GENERATION_ATTEMPTS; attempt++) {
             setSummaryAsync("Dang sinh code TLE lan " + attempt + "...");
             CodeSubmission submission = aiService.generateCode(
                     problem,
                     codeType,
                     language,
-                    promptCases
+                    promptCases,
+                    complexityInfo,
+                    lastFailure
             );
             setSummaryAsync("Dang validate code TLE lan " + attempt + "...");
             TleValidationResult validation = validateTleSubmission(
@@ -192,6 +195,10 @@ public class ResultController implements Initializable {
                         valueOrEmpty(submission.getExplanation())
                                 + "\n\nLocal validation: "
                                 + validation.message()
+                                + "\nComplexity target: "
+                                + valueOrEmpty(complexityInfo.getTleTargetComplexity())
+                                + " via "
+                                + valueOrEmpty(complexityInfo.getTleStrategy())
                 );
                 return submission;
             }
@@ -219,6 +226,11 @@ public class ResultController implements Initializable {
         String language = valueOrEmpty(submission.getLanguage()).isBlank()
                 ? requestedLanguage
                 : submission.getLanguage();
+        TleValidationResult sourceCheck = validateTleSourceShape(submission.getCode());
+        if (!sourceCheck.valid()) {
+            return sourceCheck;
+        }
+
         List<TestCase> probes = validationCases.stream()
                 .map(this::copyForValidation)
                 .toList();
@@ -245,6 +257,9 @@ public class ResultController implements Initializable {
                     "Case " + valueOrEmpty(probe.getId())
                             + " ra " + (verdict.isBlank() ? "UNKNOWN" : verdict)
                             + " thay vi AC/TLE"
+                            + "\nInput:\n" + valueOrEmpty(probe.getInput()).strip()
+                            + "\nExpected:\n" + valueOrEmpty(probe.getExpectedOutput()).strip()
+                            + "\nActual:\n" + valueOrEmpty(probe.getActualOutput()).strip()
             );
         }
 
@@ -255,6 +270,28 @@ public class ResultController implements Initializable {
         );
     }
 
+    private ComplexityInfo analyzeComplexityForTle() {
+        try {
+            setSummaryAsync("Dang phan tich complexity cho TLE...");
+            ComplexityInfo info = aiService.analyzeComplexity(problem);
+            return info == null ? defaultComplexityInfo() : info;
+        } catch (Exception e) {
+            return defaultComplexityInfo();
+        }
+    }
+
+    private ComplexityInfo defaultComplexityInfo() {
+        ComplexityInfo info = new ComplexityInfo();
+        info.setOptimalComplexity("unknown");
+        info.setTleTargetComplexity("O(n^2)");
+        info.setMaxN(0);
+        info.setTleStrategy("input_dependent_bruteforce");
+        info.setTleExplanation(
+                "Use a straightforward but correct algorithm whose runtime grows with input size."
+        );
+        return info;
+    }
+
     private List<TestCase> tleValidationCases() {
         List<TestCase> available = testCases.stream()
                 .filter(testCase -> testCase != null
@@ -263,47 +300,48 @@ public class ResultController implements Initializable {
                         && testCase.getExpectedOutput() != null
                         && !testCase.getExpectedOutput().isBlank())
                 .toList();
-        if (available.size() <= MAX_TLE_VALIDATION_CASES) {
-            return available;
-        }
-
-        List<TestCase> selected = new ArrayList<>();
-        List<TestCase> killer = available.stream()
-                .filter(this::isKillerCase)
+        List<TestCase> small = available.stream()
+                .filter(this::isSmallCase)
+                .limit(MAX_TLE_VALIDATION_CASES)
                 .toList();
-        List<TestCase> nonKiller = available.stream()
-                .filter(testCase -> !isKillerCase(testCase))
+        if (!small.isEmpty()) {
+            return small;
+        }
+        return available.stream()
+                .limit(MAX_TLE_VALIDATION_CASES)
                 .toList();
-
-        int nonKillerLimit = MAX_TLE_VALIDATION_CASES
-                - Math.min(MAX_TLE_VALIDATION_KILLER_CASES, killer.size());
-        for (TestCase testCase : nonKiller) {
-            if (selected.size() >= nonKillerLimit) {
-                break;
-            }
-            selected.add(testCase);
-        }
-        for (TestCase testCase : killer) {
-            if (selected.size() >= MAX_TLE_VALIDATION_CASES) {
-                break;
-            }
-            selected.add(testCase);
-        }
-        return selected;
     }
 
     private List<TestCase> promptValidationCases(List<TestCase> validationCases) {
         return validationCases.stream()
-                .filter(testCase -> !isKillerCase(testCase))
                 .filter(testCase -> valueOrEmpty(testCase.getInput()).length() <= 4000)
                 .filter(testCase -> valueOrEmpty(testCase.getExpectedOutput()).length() <= 4000)
-                .limit(6)
+                .limit(MAX_TLE_VALIDATION_CASES)
                 .toList();
     }
 
-    private boolean isKillerCase(TestCase testCase) {
+    private boolean isSmallCase(TestCase testCase) {
         String description = valueOrEmpty(testCase.getDescription()).toUpperCase();
-        return description.contains("[KILLER]") || description.contains("KILLER");
+        return description.startsWith("[SMALL]") || description.contains("SMALL");
+    }
+
+    private TleValidationResult validateTleSourceShape(String code) {
+        String source = valueOrEmpty(code);
+        String lowered = source.toLowerCase();
+        if (lowered.contains("sleep(")
+                || lowered.contains("usleep")
+                || lowered.contains("thread.sleep")
+                || lowered.contains("this_thread::sleep")
+                || lowered.contains("settimeout")) {
+            return new TleValidationResult(false, "TLE code uses sleep/delay instead of a slow algorithm.");
+        }
+        if (lowered.contains("dummy") || lowered.contains("busy wait") || lowered.contains("busywait")) {
+            return new TleValidationResult(false, "TLE code appears to use dummy busy work.");
+        }
+        if (lowered.contains("while(true)") || lowered.contains("while (true)")) {
+            return new TleValidationResult(false, "TLE code contains an infinite loop.");
+        }
+        return new TleValidationResult(true, "Source shape accepted.");
     }
 
     private TestCase copyForValidation(TestCase source) {

@@ -1,4 +1,6 @@
-from models.schemas import CodeGenResponse, ProblemSchema, TestCaseSchema
+from typing import Any
+
+from models.schemas import CodeGenResponse, ComplexityInfo, ProblemSchema, TestCaseSchema
 from services.groq_json import request_json, request_text
 
 
@@ -80,9 +82,12 @@ def generate_code(
     code_type: str,
     language: str,
     validation_cases: list[TestCaseSchema] | None = None,
+    complexity_info: dict[str, Any] | ComplexityInfo | None = None,
+    error_log: str = "",
 ) -> CodeGenResponse:
-    instruction = TYPE_INSTRUCTIONS.get(code_type, TYPE_INSTRUCTIONS["AC"])
+    instruction = _instruction_for_code_type(code_type, complexity_info)
     validation_text = _validation_cases_prompt(validation_cases or [], code_type)
+    error_feedback_text = _error_feedback_prompt(error_log)
     prompt = f"""
 {instruction}
 
@@ -92,6 +97,8 @@ Problem:
 Language: {language}
 
 {validation_text}
+
+{error_feedback_text}
 
 Before returning, verify mentally that the source follows the input format exactly,
 prints only the required output, and matches all sample inputs/outputs embedded in
@@ -109,7 +116,10 @@ Escape all line breaks inside the code string as \\n.
     code = _find_text_value(data, "code", "source_code", "solution")
     explanation = _find_text_value(data, "explanation", "notes")
     if not code.strip():
-        code = _generate_code_text(problem, code_type, language, instruction)
+        fallback_instruction = "\n\n".join(
+            text for text in [instruction, validation_text, error_feedback_text] if text.strip()
+        )
+        code = _generate_code_text(problem, code_type, language, fallback_instruction)
         explanation = explanation or "Generated as source code after the JSON response omitted code."
     if not code.strip():
         raise RuntimeError("AI response did not include generated code")
@@ -137,6 +147,63 @@ Return ONLY the complete source code. Do not use markdown fences.
 """
     content = request_text([{"role": "user", "content": prompt}])
     return _strip_code_fence(content)
+
+
+def _instruction_for_code_type(
+    code_type: str,
+    complexity_info: dict[str, Any] | ComplexityInfo | None,
+) -> str:
+    if code_type != "TLE":
+        return TYPE_INSTRUCTIONS.get(code_type, TYPE_INSTRUCTIONS["AC"])
+
+    info = _normalize_complexity_info(complexity_info)
+    return f"""
+Generate a solution for this problem that is:
+1. CORRECT: it produces the right answer for every valid input.
+2. SLOW: it uses {info.tle_strategy} with complexity {info.tle_target_complexity}.
+3. Input-dependent: the slowness must come from the algorithm and scale with the
+   real input size, not from artificial work.
+
+Complexity target:
+- Expected optimal complexity: {info.optimal_complexity}
+- Slow TLE target complexity: {info.tle_target_complexity}
+- Approximate max N: {info.max_n}
+- Strategy: {info.tle_strategy}
+- Why this is slow but correct: {info.tle_explanation}
+
+Forbidden:
+- sleep(), usleep(), Thread.sleep(), delay, timers, or wall-clock checks
+- infinite loops
+- fixed dummy loops that do not depend on parsed input
+- random or nondeterministic behavior
+- deliberate wrong answers, compile errors, or runtime errors
+
+If the program finishes on a validation case, its output must match the expected
+output exactly. For large inputs, it should become slow because the selected
+algorithm has poor asymptotic complexity.
+""".strip()
+
+
+def _normalize_complexity_info(
+    complexity_info: dict[str, Any] | ComplexityInfo | None,
+) -> ComplexityInfo:
+    if isinstance(complexity_info, ComplexityInfo):
+        return complexity_info
+    if isinstance(complexity_info, dict) and complexity_info:
+        try:
+            return ComplexityInfo(**complexity_info)
+        except Exception:
+            pass
+    return ComplexityInfo()
+
+
+def _error_feedback_prompt(error_log: str) -> str:
+    if not error_log or not error_log.strip():
+        return ""
+    return (
+        "Previous attempt failed local validation. Fix these exact issues in the "
+        "next solution:\n" + error_log.strip()
+    )
 
 
 def fix_code(

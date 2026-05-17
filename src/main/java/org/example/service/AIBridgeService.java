@@ -5,6 +5,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.example.model.CodeSubmission;
+import org.example.model.ComplexityInfo;
 import org.example.model.Problem;
 import org.example.model.StressResult;
 import org.example.model.TestCase;
@@ -56,6 +57,16 @@ public class AIBridgeService {
 
         JsonObject response = HttpUtil.postJson(baseUrl + "/analyze", body, JsonObject.class);
         return gson.fromJson(response.getAsJsonObject("problem"), Problem.class);
+    }
+
+    public ComplexityInfo analyzeComplexity(Problem problem) throws Exception {
+        Map<String, Object> body = new HashMap<>();
+        body.put("problem", problem);
+        return HttpUtil.postJson(
+                baseUrl + "/analyze/complexity",
+                body,
+                ComplexityInfo.class
+        );
     }
 
     public List<TestCase> generateTestCases(Problem problem, int count,
@@ -183,11 +194,21 @@ public class AIBridgeService {
     public CodeSubmission generateCode(Problem problem, String type,
                                        String language,
                                        List<TestCase> validationCases) throws Exception {
+        return generateCode(problem, type, language, validationCases, null, "");
+    }
+
+    public CodeSubmission generateCode(Problem problem, String type,
+                                       String language,
+                                       List<TestCase> validationCases,
+                                       ComplexityInfo complexityInfo,
+                                       String errorLog) throws Exception {
         Map<String, Object> body = new HashMap<>();
         body.put("problem", problem);
         body.put("type", type);
         body.put("language", language);
         body.put("validation_cases", validationCases == null ? List.of() : validationCases);
+        body.put("complexity_info", complexityInfo == null ? Map.of() : complexityInfo);
+        body.put("error_log", errorLog == null ? "" : errorLog);
 
         return HttpUtil.postJson(baseUrl + "/codegen", body, CodeSubmission.class);
     }

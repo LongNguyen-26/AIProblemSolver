@@ -30,6 +30,20 @@ class AnalyzeResponse(BaseModel):
     problem: ProblemSchema
 
 
+class ComplexityRequest(BaseModel):
+    problem: ProblemSchema
+
+
+class ComplexityInfo(BaseModel):
+    optimal_complexity: str = "unknown"
+    tle_target_complexity: str = "O(n^2)"
+    max_n: int = 0
+    tle_strategy: str = "input_dependent_bruteforce"
+    tle_explanation: str = (
+        "Use a straightforward but correct algorithm whose work grows with input size."
+    )
+
+
 class TestCaseRequest(BaseModel):
     problem: ProblemSchema
     count: int = 10
@@ -70,6 +84,8 @@ class CodeGenRequest(BaseModel):
     type: str = "AC"
     language: str = "cpp"
     validation_cases: List[TestCaseSchema] = Field(default_factory=list)
+    error_log: str = ""
+    complexity_info: dict = Field(default_factory=dict)
 
 
 class CodeGenResponse(BaseModel):

@@ -1,57 +1,44 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-struct Balloon {
-    long long v; // current air
-    long long t; // deadline
-};
-
 int main(){
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
     int T; if(!(cin>>T)) return 0;
     while(T--){
         int n;cin>>n;
-        vector<Balloon> a(n);
+        vector<long long> t(n), v(n);
         long long maxT=0;
         for(int i=0;i<n;i++){
-            cin>>a[i].t>>a[i].v;
-            maxT=max(maxT,a[i].t);
+            cin>>t[i]>>v[i];
+            maxT=max(maxT,t[i]);
         }
-        // priority queue of (marginal gain, index)
-        using Node=pair<long long,int>; // gain, idx
-        auto cmp=[](const Node&x,const Node&y){return x.first<y.first;};
-        priority_queue<Node,vector<Node>,decltype(cmp)> pq(cmp);
-        // initially all balloons are available
+        // events: at each time we add balloons whose deadline > current time
+        vector<vector<int>> add(maxT+2);
         for(int i=0;i<n;i++){
-            long long gain=2*a[i].v+1; // first liter marginal gain
-            pq.emplace(gain,i);
+            // balloon i is available for times [0, t[i)-1]
+            add[0].push_back(i);
         }
-        long long totalBeauty=0;
-        // simulate each second
-        for(long long cur=0; cur<maxT; ++cur){
-            // remove balloons whose deadline <= cur
-            while(!pq.empty()){
-                auto [gain, idx]=pq.top();
-                if(a[idx].t<=cur){ // cannot use any more
-                    pq.pop();
-                    continue;
-                }
-                break;
-            }
-            if(pq.empty()) continue; // idle second
-            auto [gain, idx]=pq.top(); pq.pop();
-            // blow one liter into balloon idx
-            a[idx].v+=1;
-            // push updated marginal gain
-            long long newGain=2*a[idx].v+1;
-            pq.emplace(newGain,idx);
+        // priority queue of pair(current amount, index) max by current amount
+        struct Node{ long long cur; int idx;};
+        struct Cmp{ bool operator()(const Node&a,const Node&b) const{ return a.cur<b.cur; } };
+        priority_queue<Node, vector<Node>, Cmp> pq;
+        // we will push all balloons at start, but need to remove when deadline passes.
+        // To handle removal, store deadline and skip when popped if expired.
+        vector<long long> cur(v.begin(), v.end());
+        for(int i=0;i<n;i++) pq.push({cur[i], i});
+        long long total=0;
+        for(long long time=0; time<maxT; ++time){
+            // pop expired balloons
+            while(!pq.empty() && t[pq.top().idx]<=time) pq.pop();
+            if(pq.empty()) continue;
+            Node top=pq.top(); pq.pop();
+            // blow one liter into this balloon
+            cur[top.idx]++;
+            pq.push({cur[top.idx], top.idx});
         }
-        // compute final beauty
-        for(int i=0;i<n;i++){
-            totalBeauty+=a[i].v*a[i].v;
-        }
-        cout<<totalBeauty<<"\n";
+        for(int i=0;i<n;i++) total+=cur[i]*cur[i];
+        cout<<total<<"\n";
     }
     return 0;
 }

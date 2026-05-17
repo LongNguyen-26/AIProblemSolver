@@ -14,6 +14,8 @@ async def codegen(request: CodeGenRequest):
             request.type,
             request.language,
             request.validation_cases,
+            request.complexity_info,
+            request.error_log,
         )
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc

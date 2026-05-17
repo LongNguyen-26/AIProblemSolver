@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from models.schemas import AnalyzeRequest, AnalyzeResponse
+from models.schemas import AnalyzeRequest, AnalyzeResponse, ComplexityInfo, ComplexityRequest
+from services.complexity_analyzer import analyze_complexity
 from services.ocr_service import image_base64_to_text
 from services.problem_analyzer import analyze_problem
 
@@ -25,3 +26,11 @@ async def analyze(request: AnalyzeRequest):
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
     return AnalyzeResponse(problem=problem)
+
+
+@router.post("/analyze/complexity", response_model=ComplexityInfo)
+async def complexity(request: ComplexityRequest):
+    try:
+        return analyze_complexity(request.problem)
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
