@@ -44,6 +44,27 @@ class TestCaseResponse(BaseModel):
     checker_code: str = ""
 
 
+class StressRequest(BaseModel):
+    problem: ProblemSchema
+    small_cases: List[TestCaseSchema] = Field(default_factory=list)
+    rounds: int = 30
+
+
+class StressResult(BaseModel):
+    trusted: bool = False
+    trusted_oracle_code: str = ""
+    trusted_oracle_language: str = "python"
+    found_counterexample: bool = False
+    counterexample_input: str = ""
+    brute_output: str = ""
+    optimized_output: str = ""
+    rounds_completed: int = 0
+    oracle_retries: int = 0
+    generator_trusted: bool = False
+    message: str = ""
+    problem_type: str = "general"
+
+
 class CodeGenRequest(BaseModel):
     problem: ProblemSchema
     type: str = "AC"

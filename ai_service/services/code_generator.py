@@ -65,6 +65,13 @@ TYPE_INSTRUCTIONS = {
         "canonical construction style as a correct solution, not an unsupported "
         "one-variable heuristic."
     ),
+    "GENERATOR": (
+        "Write a Python random input generator for this competitive programming "
+        "problem. The generator reads an optional integer seed from stdin and "
+        "prints exactly one complete valid stdin instance for the target problem. "
+        "Keep generated values small enough for brute-force reference solutions "
+        "but diverse enough to expose edge cases. Print only the generated input."
+    ),
 }
 
 
@@ -130,6 +137,61 @@ Return ONLY the complete source code. Do not use markdown fences.
 """
     content = request_text([{"role": "user", "content": prompt}])
     return _strip_code_fence(content)
+
+
+def fix_code(
+    problem: ProblemSchema,
+    broken_code: str,
+    error_feedback: str,
+    code_type: str,
+    language: str = "python",
+) -> str:
+    instruction = TYPE_INSTRUCTIONS.get(code_type, TYPE_INSTRUCTIONS["AC"])
+    prompt = f"""
+You previously generated this {code_type} code for the problem below.
+It has a bug. Fix it.
+
+Original instruction:
+{instruction}
+
+Problem:
+{problem.model_dump_json(indent=2)}
+
+Language: {language}
+
+Broken code:
+```{language}
+{broken_code}
+```
+
+Error / wrong-answer feedback:
+{error_feedback}
+
+Return ONLY the fixed complete source code. Do not use markdown fences.
+"""
+    return _strip_code_fence(request_text([{"role": "user", "content": prompt}]))
+
+
+def generate_input_generator(problem: ProblemSchema, profile: str = "SMALL") -> str:
+    prompt = f"""
+{TYPE_INSTRUCTIONS["GENERATOR"]}
+
+Problem:
+{problem.model_dump_json(indent=2)}
+
+Profile: {profile}
+
+Rules:
+- Use only Python standard library.
+- Read the seed with sys.stdin.read(); if it is blank, use seed 0.
+- Print exactly one complete stdin input for the problem, not multiple labelled cases.
+- Keep the full output under 5000 characters for SMALL stress rounds.
+- If the statement has a leading t/T, print a valid t and exactly that many scenarios.
+- Do not print explanations, markdown, expected output, or comments outside the source.
+
+Return ONLY the complete Python source code.
+"""
+    return _strip_code_fence(request_text([{"role": "user", "content": prompt}]))
 
 
 def _find_text_value(data: dict, *keys: str) -> str:

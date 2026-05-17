@@ -6,10 +6,12 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.example.model.CodeSubmission;
 import org.example.model.Problem;
+import org.example.model.StressResult;
 import org.example.model.TestCase;
 import org.example.util.AppConfig;
 import org.example.util.HttpUtil;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -188,6 +190,21 @@ public class AIBridgeService {
         body.put("validation_cases", validationCases == null ? List.of() : validationCases);
 
         return HttpUtil.postJson(baseUrl + "/codegen", body, CodeSubmission.class);
+    }
+
+    public StressResult runStress(Problem problem, List<TestCase> smallCases,
+                                  int rounds) throws Exception {
+        Map<String, Object> body = new HashMap<>();
+        body.put("problem", problem);
+        body.put("small_cases", smallCases == null ? List.of() : smallCases);
+        body.put("rounds", rounds);
+
+        return HttpUtil.postJson(
+                baseUrl + "/stress",
+                body,
+                StressResult.class,
+                Duration.ofSeconds(180)
+        );
     }
 
     private String normalizeBaseUrl(String value) {

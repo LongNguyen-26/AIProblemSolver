@@ -1,40 +1,57 @@
 #include <bits/stdc++.h>
 using namespace std;
 
+struct Balloon {
+    long long v; // current air
+    long long t; // deadline
+};
+
 int main(){
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
     int T; if(!(cin>>T)) return 0;
     while(T--){
         int n;cin>>n;
-        vector<long long> t(n), v(n), blown(n,0);
+        vector<Balloon> a(n);
         long long maxT=0;
         for(int i=0;i<n;i++){
-            cin>>t[i]>>v[i];
-            maxT=max(maxT,t[i]);
+            cin>>a[i].t>>a[i].v;
+            maxT=max(maxT,a[i].t);
         }
-        // naive simulation: for each second from 0 to maxT-1, pick balloon with largest current amount that is still dispatchable
-        for(long long cur=0; cur<maxT; ++cur){
-            long long best=-1; int idx=-1;
-            for(int i=0;i<n;i++){
-                if(t[i]>cur){ // still can be blown
-                    long long curAmt=v[i]+blown[i];
-                    if(curAmt>best){
-                        best=curAmt; idx=i;
-                    }
-                }
-            }
-            if(idx!=-1){
-                ++blown[idx];
-            }
-        }
-        __int128 total=0;
+        // priority queue of (marginal gain, index)
+        using Node=pair<long long,int>; // gain, idx
+        auto cmp=[](const Node&x,const Node&y){return x.first<y.first;};
+        priority_queue<Node,vector<Node>,decltype(cmp)> pq(cmp);
+        // initially all balloons are available
         for(int i=0;i<n;i++){
-            long long finalAmt=v[i]+blown[i];
-            total+= (__int128)finalAmt*finalAmt;
+            long long gain=2*a[i].v+1; // first liter marginal gain
+            pq.emplace(gain,i);
         }
-        long long out=(long long)total; // fits in 64-bit for given constraints
-        cout<<out<<"\n";
+        long long totalBeauty=0;
+        // simulate each second
+        for(long long cur=0; cur<maxT; ++cur){
+            // remove balloons whose deadline <= cur
+            while(!pq.empty()){
+                auto [gain, idx]=pq.top();
+                if(a[idx].t<=cur){ // cannot use any more
+                    pq.pop();
+                    continue;
+                }
+                break;
+            }
+            if(pq.empty()) continue; // idle second
+            auto [gain, idx]=pq.top(); pq.pop();
+            // blow one liter into balloon idx
+            a[idx].v+=1;
+            // push updated marginal gain
+            long long newGain=2*a[idx].v+1;
+            pq.emplace(newGain,idx);
+        }
+        // compute final beauty
+        for(int i=0;i<n;i++){
+            totalBeauty+=a[i].v*a[i].v;
+        }
+        cout<<totalBeauty<<"\n";
     }
     return 0;
 }

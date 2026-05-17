@@ -21,11 +21,17 @@ public final class HttpUtil {
 
     public static <T> T postJson(String url, Object requestBody, Class<T> responseType)
             throws Exception {
+        return postJson(url, requestBody, responseType, Duration.ofSeconds(60));
+    }
+
+    public static <T> T postJson(String url, Object requestBody, Class<T> responseType,
+                                 Duration timeout)
+            throws Exception {
         String json = GSON.toJson(requestBody);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .version(HttpClient.Version.HTTP_1_1)
-                .timeout(Duration.ofSeconds(60))
+                .timeout(timeout == null ? Duration.ofSeconds(60) : timeout)
                 .header("Accept", "application/json")
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))

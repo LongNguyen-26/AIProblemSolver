@@ -19,6 +19,7 @@ import javafx.stage.FileChooser;
 import javafx.stage.Window;
 import org.example.model.CodeSubmission;
 import org.example.model.Problem;
+import org.example.model.StressResult;
 import org.example.model.TestCase;
 import org.example.service.AIBridgeService;
 import org.example.service.ExecutionService;
@@ -299,10 +300,15 @@ public class MainController implements Initializable {
         }
 
         List<TestCase> verifiedSmallCases = takeCases(verifiedValidationCases, plan.smallCount());
-        OracleRun optimized = findTrustedOptimizedOracle(problem, verifiedValidationCases);
+        StressOracleResult stressOracle = findStressAgentOptimizedOracle(
+                problem,
+                verifiedValidationCases
+        );
+        OracleRun optimized = stressOracle.oracle();
         if (optimized == null || plan.mediumCount() + plan.killerCount() <= 0) {
             String reason = optimized == null
-                    ? "; optimized code chua pass stress nen bo qua medium/killer"
+                    ? "; canh bao: stress agent chua trust optimized oracle"
+                    + nonBlankSuffix(stressOracle.message())
                     : "";
             List<TestCase> fallbackCases = takeCases(verifiedValidationCases, plan.totalCount());
             return new ExpectedBatch(
@@ -346,13 +352,63 @@ public class MainController implements Initializable {
                         + mediumCases.size()
                         + " medium, "
                         + killerCases.size()
-                        + " killer)",
+                        + " killer; stress agent "
+                        + stressOracle.roundsCompleted()
+                        + " rounds)",
                 submissionFromOracle(
                         optimized,
                         "AC",
                         "Cached optimized oracle used to generate these expected outputs."
                 )
         );
+    }
+
+    private StressOracleResult findStressAgentOptimizedOracle(
+            Problem problem,
+            List<TestCase> verifiedSmallCases
+    ) {
+        try {
+            setStatusAsync("Dang chay stress agent de verify optimized oracle...");
+            StressResult stressResult = aiService.runStress(problem, verifiedSmallCases, 30);
+            if (stressResult == null) {
+                return new StressOracleResult(null, "stress endpoint returned no result", 0);
+            }
+
+            String message = valueOrEmpty(stressResult.getMessage());
+            if (!stressResult.isTrusted()
+                    || stressResult.getTrustedOracleCode() == null
+                    || stressResult.getTrustedOracleCode().isBlank()) {
+                if (stressResult.isFoundCounterexample()) {
+                    message = "found counterexample during stress";
+                } else if (message.isBlank()) {
+                    message = "oracle was not trusted";
+                }
+                setStatusAsync("Canh bao: stress agent khong trust oracle - " + message);
+                return new StressOracleResult(null, message, stressResult.getRoundsCompleted());
+            }
+
+            String language = valueOrEmpty(stressResult.getTrustedOracleLanguage()).isBlank()
+                    ? "python"
+                    : stressResult.getTrustedOracleLanguage();
+            OracleRun oracle = new OracleRun(
+                    "STRESS_AGENT",
+                    stressResult.getTrustedOracleCode(),
+                    language,
+                    inputsOf(verifiedSmallCases),
+                    verifiedSmallCases.stream()
+                            .map(TestCase::getExpectedOutput)
+                            .toList()
+            );
+            return new StressOracleResult(
+                    oracle,
+                    message,
+                    stressResult.getRoundsCompleted()
+            );
+        } catch (Exception e) {
+            String message = rootCauseMessage(e);
+            setStatusAsync("Canh bao: stress agent loi - " + message);
+            return new StressOracleResult(null, message, 0);
+        }
     }
 
     private ExpectedBatch buildCanonicalAcExpectedCases(
@@ -827,6 +883,11 @@ public class MainController implements Initializable {
         return value == null ? "" : value;
     }
 
+    private String nonBlankSuffix(String value) {
+        String text = valueOrEmpty(value);
+        return text.isBlank() ? "" : " (" + text + ")";
+    }
+
     private CodeSubmission submissionFromOracle(
             OracleRun oracle,
             String type,
@@ -940,6 +1001,13 @@ public class MainController implements Initializable {
             String language,
             List<String> inputs,
             List<String> outputs
+    ) {
+    }
+
+    private record StressOracleResult(
+            OracleRun oracle,
+            String message,
+            int roundsCompleted
     ) {
     }
 
