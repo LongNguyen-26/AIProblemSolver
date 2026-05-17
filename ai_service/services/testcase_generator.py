@@ -17,6 +17,107 @@ MAX_TESTCASE_INPUT_CHARS = 200000
 MAX_GENERATION_ATTEMPTS = 3
 MAX_EXISTING_INPUTS_IN_PROMPT = 20
 MAX_EXISTING_INPUT_CHARS_IN_PROMPT = 1000
+MAX_KILLER_STRATEGY_BUFFER = 2
+
+KILLER_STRATEGIES = {
+    "ARRAY_SEQUENCE": [
+        "All elements equal to MAX_VALUE with n=MAX_N",
+        "Strictly increasing sequence with n=MAX_N",
+        "Strictly decreasing sequence with n=MAX_N",
+        "Alternating maximum/minimum values with n=MAX_N",
+        "Single large positive value followed by zeros",
+    ],
+    "GRAPH_UNDIRECTED": [
+        "Long path graph (bamboo) with n=MAX_N",
+        "Star graph with one center and n-1 leaves",
+        "Dense graph near MAX_M without duplicate edges",
+        "Two dense components connected by a single bridge",
+        "Cycle plus many chord edges",
+    ],
+    "GRAPH_DIRECTED": [
+        "Long directed chain with n=MAX_N",
+        "DAG with many forward edges in topological order",
+        "Dense strongly connected components",
+        "One source connected to many sinks with back edges",
+    ],
+    "TREE": [
+        "Bamboo tree (single path) with n=MAX_N",
+        "Star tree with n=MAX_N",
+        "Balanced binary tree near MAX_N",
+        "Caterpillar tree with a long spine and many leaves",
+    ],
+    "DP_1D": [
+        "All states reachable with n=MAX_N",
+        "All item values identical to force tie-heavy transitions",
+        "Capacity or target at maximum with small repeated weights",
+        "Impossible boundary state near maximum constraints",
+    ],
+    "DP_2D": [
+        "Square grid near maximum area",
+        "Single row with maximum length",
+        "Single column with maximum length",
+        "Checkerboard obstacle/value pattern",
+        "Uniform grid values that maximize transitions",
+    ],
+    "DP_BITMASK": [
+        "n at maximum bitmask limit with all costs equal",
+        "Dense compatibility matrix with many valid subsets",
+        "Near-complete assignment choices to maximize transitions",
+    ],
+    "MATH_NUMBER_THEORY": [
+        "Largest prime-like value near MAX_VALUE",
+        "Large composite with many small prime factors",
+        "Values near maximum that risk overflow",
+        "Many queries all near maximum values",
+    ],
+    "MATH_COMBINATORICS": [
+        "n=MAX_N and k=n/2",
+        "n=MAX_N with k=0 and k=n boundary mix",
+        "Many large test scenarios requiring modular arithmetic",
+    ],
+    "STRING": [
+        "Maximum length all-same character string",
+        "Maximum length highly periodic string",
+        "Alternating characters at maximum length",
+        "Pattern almost matches text at every position",
+    ],
+    "GEOMETRY": [
+        "Maximum points all collinear",
+        "Maximum points with many duplicates if allowed",
+        "Coordinates at positive and negative extremes",
+        "All points on convex hull",
+    ],
+    "GREEDY": [
+        "Maximum intervals all sharing the same endpoint",
+        "Tie-heavy tasks with identical profit/deadline",
+        "All intervals overlapping",
+        "Sorted input that breaks wrong tie-breaking",
+    ],
+    "BINARY_SEARCH": [
+        "Answer exactly at lower boundary",
+        "Answer exactly at upper boundary",
+        "All values equal with n=MAX_N",
+        "Feasibility changes only at the final position",
+    ],
+    "DATA_STRUCTURE": [
+        "n=q=MAX with alternating update/query operations",
+        "All queries on full range",
+        "All updates on the same index",
+        "Nested ranges with many repeated values",
+    ],
+    "CONSTRUCTIVE": [
+        "Maximum n with tight constraints",
+        "Minimal impossible boundary case",
+        "Maximum impossible-looking case",
+        "Tie-heavy parameters with many valid constructions",
+    ],
+    "GAME_THEORY": [
+        "Maximum n symmetric position",
+        "Large losing position near boundary",
+        "Large winning position requiring non-greedy move",
+        "Many piles/states with repeated values",
+    ],
+}
 
 
 def generate_testcases(
@@ -28,6 +129,14 @@ def generate_testcases(
 ) -> TestCaseResponse:
     requested_count = max(1, min(count, 50))
     normalized_profile = _normalize_profile(profile)
+
+    if normalized_profile == "KILLER":
+        killer_cases = generate_killer_cases(problem, requested_count, existing_inputs or [])
+        return TestCaseResponse(
+            testcases=killer_cases[:requested_count],
+            checker_code=DEFAULT_CHECKER_CODE,
+        )
+
     collected: list[TestCaseSchema] = []
     seen_inputs = _input_key_set(existing_inputs or [])
 
@@ -77,6 +186,101 @@ def generate_testcases(
     return TestCaseResponse(
         testcases=collected[:requested_count],
         checker_code=DEFAULT_CHECKER_CODE,
+    )
+
+
+def generate_killer_cases(
+    problem: ProblemSchema,
+    count: int,
+    existing_inputs: list[str] | None = None,
+) -> list[TestCaseSchema]:
+    requested_count = max(1, min(count, 50))
+    collected: list[TestCaseSchema] = []
+    seen_inputs = _input_key_set(existing_inputs or [])
+    strategies = _killer_strategies_for(problem)
+
+    for strategy in strategies[: requested_count * MAX_KILLER_STRATEGY_BUFFER]:
+        case = generate_single_killer_case(problem, strategy, list(seen_inputs))
+        _append_unique_testcases(collected, [case] if case else [], seen_inputs)
+        if len(collected) >= requested_count:
+            break
+
+    attempts = 0
+    while len(collected) < requested_count and attempts < MAX_GENERATION_ATTEMPTS:
+        generated = _generate_random_killer_cases(
+            problem,
+            requested_count - len(collected),
+            list(seen_inputs),
+        )
+        _append_unique_testcases(collected, generated, seen_inputs)
+        attempts += 1
+
+    if len(collected) < requested_count:
+        fallback_cases = _sample_fallback_testcases(
+            problem,
+            requested_count - len(collected),
+            seen_inputs,
+        )
+        _append_unique_testcases(collected, fallback_cases, seen_inputs)
+
+    return collected[:requested_count]
+
+
+def generate_single_killer_case(
+    problem: ProblemSchema,
+    strategy: str,
+    existing_inputs: list[str] | None = None,
+) -> TestCaseSchema | None:
+    existing_keys = _input_key_set(existing_inputs or [])
+    classification = classify_problem_fast(problem)
+    max_n = _extract_max_n(problem.constraints or [])
+    prompt = f"""
+You are generating a KILLER test case for a competitive programming problem.
+
+Problem:
+{problem.model_dump_json(indent=2)}
+
+Problem type: {classification.primary_type}
+Constraints:
+{_constraint_text(problem)}
+Strategy: {strategy}
+
+YOUR TASK: Generate EXACTLY ONE complete stdin input that:
+1. Uses maximum possible values when the input format allows it (target n={max_n or "MAX_N from constraints"})
+2. Follows this exact strategy: {strategy}
+3. Is syntactically valid per the input format
+4. Would cause O(n^2), O(n*m), recursion-depth, or otherwise weak algorithms to fail
+5. Stays under {MAX_TESTCASE_INPUT_CHARS} characters of raw stdin
+
+CRITICAL OUTPUT FORMAT:
+- Output ONLY the raw test input text
+- NO explanation, NO labels, NO expected output, NO markdown
+- Start directly with the first line of input
+
+Input format:
+{problem.input_format or "Infer from the statement JSON above."}
+
+{_existing_inputs_guidance(list(existing_keys), "KILLER")}
+
+Generate the killer test case now:
+"""
+    try:
+        content = request_text([{"role": "user", "content": prompt}])
+    except Exception:
+        return None
+
+    input_text = _clean_raw_input_response(content)
+    if not _is_usable_input(input_text):
+        return None
+    if _input_key(input_text) in existing_keys:
+        return None
+
+    return TestCaseSchema(
+        id=_new_id(),
+        input=input_text.strip(),
+        expected_output="",
+        description=f"[KILLER] {strategy}",
+        is_edge_case=True,
     )
 
 
@@ -176,6 +380,100 @@ The DESC line must name the profile and the type-specific edge/killer pattern ta
 """
     content = request_text([{"role": "user", "content": prompt}])
     return _parse_text_cases(content, count)
+
+
+def _generate_random_killer_cases(
+    problem: ProblemSchema,
+    count: int,
+    existing_inputs: list[str],
+) -> list[TestCaseSchema]:
+    strategies = _killer_strategies_for(problem)
+    hint = "; ".join(strategies[:3])
+    try:
+        cases = _generate_text_testcases(
+            problem,
+            count,
+            True,
+            "KILLER",
+            existing_inputs,
+        )
+    except Exception:
+        cases = []
+
+    for case in cases:
+        if not case.description:
+            case.description = f"[KILLER] Random maximum-size adversarial case: {hint}"
+        elif "[KILLER]" not in case.description.upper():
+            case.description = "[KILLER] " + case.description
+        case.is_edge_case = True
+    return cases
+
+
+def _killer_strategies_for(problem: ProblemSchema) -> list[str]:
+    classification = classify_problem_fast(problem)
+    problem_type = classification.primary_type or problem.problem_type or "ARRAY_SEQUENCE"
+    strategies = list(KILLER_STRATEGIES.get(problem_type, KILLER_STRATEGIES["ARRAY_SEQUENCE"]))
+    taxonomy_strategy = type_strategy(problem_type).get("killer_strategy", "")
+    if taxonomy_strategy:
+        strategies.insert(0, taxonomy_strategy)
+    return list(dict.fromkeys(strategy for strategy in strategies if strategy))
+
+
+def _constraint_text(problem: ProblemSchema) -> str:
+    constraints = problem.constraints or []
+    if constraints:
+        return "\n".join(f"- {value}" for value in constraints)
+    return "- No explicit constraints parsed; infer realistic maximums from the statement."
+
+
+def _extract_max_n(constraints: list[str]) -> int:
+    best = 0
+    for constraint in constraints or []:
+        text = str(constraint).replace(",", "")
+        value_pattern = r"((?:\d+\s*(?:\*|x|×|⋅|·)\s*)?10\s*\^\s*\d+|\d+(?:e\d+)?)"
+        patterns = [
+            rf"\bn\s*(?:<=|≤|<)\s*{value_pattern}",
+            rf"\bN\s*(?:<=|≤|<)\s*{value_pattern}",
+            rf"1\s*(?:<=|≤)\s*n\s*(?:<=|≤)\s*{value_pattern}",
+            rf"1\s*(?:<=|≤)\s*N\s*(?:<=|≤)\s*{value_pattern}",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                best = max(best, _parse_bound_value(match.group(1)))
+    return best
+
+
+def _parse_bound_value(value: str) -> int:
+    text = (value or "").replace(" ", "").replace(",", "").lower()
+    text = text.replace("×", "*").replace("⋅", "*").replace("·", "*").replace("x", "*")
+    try:
+        if "e" in text:
+            return int(float(text))
+        power_match = re.fullmatch(r"(?:(\d+)\*)?10\^(\d+)", text)
+        if power_match:
+            factor = int(power_match.group(1) or "1")
+            return factor * (10 ** int(power_match.group(2)))
+        return int(text)
+    except Exception:
+        return 0
+
+
+def _clean_raw_input_response(content: str) -> str:
+    text = _strip_code_fence(content or "")
+    text = _remove_optional_output_section(text)
+    text = re.sub(r"^\s*(input|stdin)\s*:\s*", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def _strip_code_fence(content: str) -> str:
+    text = (content or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1]).strip()
+        return text.strip("`").strip()
+    return text
 
 
 def _raw_testcases(data: dict[str, Any]) -> list[Any]:

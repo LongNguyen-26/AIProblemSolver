@@ -1,3 +1,5 @@
+import asyncio
+import re
 from enum import Enum
 
 from models.schemas import (
@@ -8,7 +10,14 @@ from models.schemas import (
 )
 from services.problem_analyzer import analyze_problem
 from services.problem_cache import load_cache, save_cache
-from services.testcase_generator import generate_testcases
+from services.testcase_generator import (
+    KILLER_STRATEGIES,
+    generate_single_killer_case,
+    generate_testcases,
+)
+
+
+MAX_KILLER_RETRIES = 3
 
 
 class PipelineState(Enum):
@@ -97,18 +106,42 @@ class PipelineOrchestrator:
                 "Dang sinh KILLER test cases...",
                 75,
             )
-            self.killer_cases = self._safe_generate_cases(
-                plan.killer_count,
-                "KILLER",
-                _inputs_of(self.small_cases + self.medium_cases),
-            )
+            self.killer_cases = []
+            for attempt in range(MAX_KILLER_RETRIES):
+                yield self._progress(
+                    PipelineState.GENERATING_KILLER,
+                    f"Dang sinh KILLER test cases (attempt {attempt + 1}/{MAX_KILLER_RETRIES})...",
+                    75 + attempt * 4,
+                )
+                candidates = await self._generate_killer_parallel(plan.killer_count * 2)
+                valid = [
+                    case
+                    for case in candidates
+                    if self._is_valid_killer(case.input, case.description)
+                ]
+                self.killer_cases = _merge_unique_cases(self.killer_cases, valid)[
+                    : plan.killer_count
+                ]
+                if len(self.killer_cases) >= plan.killer_count:
+                    break
+                self.warnings.append(
+                    f"KILLER attempt {attempt + 1}: {len(self.killer_cases)}/{plan.killer_count}. Retrying."
+                )
+
+            if len(self.killer_cases) < plan.killer_count:
+                yield self._progress(
+                    PipelineState.GENERATING_KILLER,
+                    "KILLER fallback: promoting MEDIUM cases.",
+                    86,
+                )
+                self.killer_cases = self._promote_medium_to_killer(plan.killer_count)
 
             yield self._progress(
                 PipelineState.QUALITY_GATE,
                 "Dang kiem tra do kho cua KILLER cases...",
                 88,
             )
-            self._quality_gate()
+            self._quality_gate(plan.killer_count)
 
             all_cases = self._all_cases()[: self.target]
             payload = {
@@ -135,10 +168,22 @@ class PipelineOrchestrator:
                 self._all_cases(),
             )
 
-    def _quality_gate(self) -> None:
+    def _quality_gate(self, expected_count: int) -> None:
+        if expected_count <= 0:
+            return
         if not self.killer_cases:
             self.warnings.append("Khong co KILLER cases de kiem tra do kho.")
+            self.killer_cases = self._promote_medium_to_killer(expected_count)
             return
+
+        valid_cases = [
+            case for case in self.killer_cases if self._is_valid_killer(case.input, case.description)
+        ]
+        if len(valid_cases) < len(self.killer_cases):
+            self.warnings.append(
+                f"Quality gate loai {len(self.killer_cases) - len(valid_cases)} KILLER cases qua yeu."
+            )
+            self.killer_cases = valid_cases
 
         small_tokens = _average_token_count(self.small_cases)
         killer_tokens = _average_token_count(self.killer_cases)
@@ -152,7 +197,104 @@ class PipelineOrchestrator:
                 _inputs_of(self._all_cases()),
             )
             if regenerated:
-                self.killer_cases = regenerated
+                self.killer_cases = [
+                    case
+                    for case in regenerated
+                    if self._is_valid_killer(case.input, case.description)
+                ] or regenerated
+
+        if len(self.killer_cases) < expected_count:
+            self.killer_cases = _merge_unique_cases(
+                self.killer_cases,
+                self._promote_medium_to_killer(expected_count),
+            )[:expected_count]
+
+    async def _generate_killer_parallel(self, count: int) -> list[TestCaseSchema]:
+        if count <= 0 or self.problem is None:
+            return []
+
+        strategies = _killer_strategies_for_problem(self.problem)
+        requested = max(count, min(len(strategies), count * 2))
+        tasks = [
+            asyncio.to_thread(
+                generate_single_killer_case,
+                self.problem,
+                strategy,
+                _inputs_of(self._all_cases()),
+            )
+            for strategy in strategies[:requested]
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        cases = [
+            result
+            for result in results
+            if isinstance(result, TestCaseSchema) and result.input
+        ]
+
+        if len(cases) < count:
+            fallback = await asyncio.to_thread(
+                generate_testcases,
+                self.problem,
+                count - len(cases),
+                self.request.include_edge_cases,
+                "KILLER",
+                _inputs_of(self._all_cases() + cases),
+            )
+            cases.extend(_cases_from_response(fallback))
+
+        return _merge_unique_cases(cases)
+
+    def _is_valid_killer(self, tc_input: str, description: str = "") -> bool:
+        if not tc_input or not tc_input.strip():
+            return False
+
+        token_count = len(tc_input.split())
+        small_tokens = _average_token_count(self.small_cases)
+        if small_tokens > 0 and token_count <= max(20.0, small_tokens * 1.5):
+            return False
+
+        max_n = _extract_max_n(self.problem.constraints if self.problem else [])
+        if 0 < max_n <= 200000 and token_count < max_n * 0.6:
+            desc = (description or "").lower()
+            if not any(
+                marker in desc
+                for marker in ("boundary", "upper", "lower", "impossible", "single")
+            ):
+                return False
+
+        numbers = _extract_numbers(tc_input)
+        if max_n > 100 and numbers and max(abs(value) for value in numbers) < max_n * 0.5:
+            if token_count < max(30, min(max_n, 200000) * 0.2):
+                return False
+
+        return True
+
+    def _promote_medium_to_killer(self, count: int) -> list[TestCaseSchema]:
+        promoted: list[TestCaseSchema] = []
+        for case in self.medium_cases:
+            if len(promoted) >= count:
+                break
+            if not case or not case.input:
+                continue
+            promoted.append(
+                TestCaseSchema(
+                    id=case.id,
+                    input=case.input,
+                    expected_output=case.expected_output,
+                    description="[KILLER] promoted MEDIUM fallback - " + (case.description or ""),
+                    is_edge_case=True,
+                )
+            )
+
+        if len(promoted) < count:
+            generated = self._safe_generate_cases(
+                count - len(promoted),
+                "KILLER",
+                _inputs_of(self._all_cases() + promoted),
+            )
+            promoted = _merge_unique_cases(promoted, generated)
+
+        return promoted[:count]
 
     def _safe_generate_cases(
         self,
@@ -226,11 +368,80 @@ def _inputs_of(cases: list[TestCaseSchema]) -> list[str]:
     return [case.input for case in cases if case and case.input]
 
 
+def _merge_unique_cases(*groups: list[TestCaseSchema]) -> list[TestCaseSchema]:
+    merged: list[TestCaseSchema] = []
+    seen: set[str] = set()
+    for group in groups:
+        for case in group or []:
+            if not case or not case.input:
+                continue
+            key = _input_key(case.input)
+            if not key or key in seen:
+                continue
+            merged.append(case)
+            seen.add(key)
+    return merged
+
+
+def _input_key(value: str) -> str:
+    normalized = (value or "").replace("\r\n", "\n").replace("\r", "\n")
+    normalized = "\n".join(line.rstrip() for line in normalized.split("\n"))
+    return normalized.strip()
+
+
 def _average_token_count(cases: list[TestCaseSchema]) -> float:
     if not cases:
         return 0.0
     counts = [len((case.input or "").split()) for case in cases]
     return sum(counts) / len(counts)
+
+
+def _killer_strategies_for_problem(problem: ProblemSchema) -> list[str]:
+    problem_type = problem.problem_type or "ARRAY_SEQUENCE"
+    strategies = KILLER_STRATEGIES.get(problem_type, KILLER_STRATEGIES["ARRAY_SEQUENCE"])
+    return list(dict.fromkeys(strategy for strategy in strategies if strategy))
+
+
+def _extract_max_n(constraints: list[str]) -> int:
+    best = 0
+    for constraint in constraints or []:
+        text = str(constraint).replace(",", "")
+        value_pattern = r"((?:\d+\s*(?:\*|x|×|⋅|·)\s*)?10\s*\^\s*\d+|\d+(?:e\d+)?)"
+        for pattern in (
+            rf"\bn\s*(?:<=|≤|<)\s*{value_pattern}",
+            rf"\bN\s*(?:<=|≤|<)\s*{value_pattern}",
+            rf"1\s*(?:<=|≤)\s*n\s*(?:<=|≤)\s*{value_pattern}",
+            rf"1\s*(?:<=|≤)\s*N\s*(?:<=|≤)\s*{value_pattern}",
+        ):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                best = max(best, _parse_bound_value(match.group(1)))
+    return best
+
+
+def _parse_bound_value(value: str) -> int:
+    text = (value or "").replace(" ", "").replace(",", "").lower()
+    text = text.replace("×", "*").replace("⋅", "*").replace("·", "*").replace("x", "*")
+    try:
+        if "e" in text:
+            return int(float(text))
+        power_match = re.fullmatch(r"(?:(\d+)\*)?10\^(\d+)", text)
+        if power_match:
+            factor = int(power_match.group(1) or "1")
+            return factor * (10 ** int(power_match.group(2)))
+        return int(text)
+    except Exception:
+        return 0
+
+
+def _extract_numbers(value: str) -> list[int]:
+    numbers: list[int] = []
+    for match in re.finditer(r"-?\d+", value or ""):
+        try:
+            numbers.append(int(match.group(0)))
+        except ValueError:
+            continue
+    return numbers
 
 
 def _build_test_pyramid_plan(total: int):
