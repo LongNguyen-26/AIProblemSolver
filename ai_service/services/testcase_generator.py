@@ -19,6 +19,26 @@ MAX_EXISTING_INPUTS_IN_PROMPT = 20
 MAX_EXISTING_INPUT_CHARS_IN_PROMPT = 1000
 MAX_KILLER_STRATEGY_BUFFER = 2
 
+CATEGORY_PROMPT_HINTS = {
+    "boundary": (
+        "Focus on boundary values: n=1, n=MAX_N, all values at MIN/MAX, "
+        "empty or zero-like limits only if valid."
+    ),
+    "edge_structural": (
+        "Focus on structural edge cases: single elements, all equal values, "
+        "sorted ascending, sorted descending, star/chain structures where relevant."
+    ),
+    "adversarial": (
+        "Design input that breaks common bugs: off-by-one errors, integer overflow, "
+        "wrong handling of duplicates, wrong tie-breaking, negative values when allowed."
+    ),
+    "stress_random": "Generate random valid input within constraints for smoke testing.",
+    "performance": (
+        "Generate maximum-size input with values chosen to maximize algorithmic work."
+    ),
+    "sample": "Use exactly an official sample input from the problem statement.",
+}
+
 KILLER_STRATEGIES = {
     "ARRAY_SEQUENCE": [
         "All elements equal to MAX_VALUE with n=MAX_N",
@@ -226,6 +246,67 @@ def generate_killer_cases(
     return collected[:requested_count]
 
 
+def generate_with_hint(
+    problem: ProblemSchema,
+    count: int,
+    profile: str,
+    hint: str,
+    existing_inputs: list[str] | None = None,
+    category: str = "",
+) -> list[TestCaseSchema]:
+    requested_count = max(1, min(count, 50))
+    normalized_profile = _normalize_profile(profile)
+    category_label = (category or "targeted").strip().lower()
+
+    if normalized_profile == "KILLER":
+        cases = generate_killer_cases(problem, requested_count, existing_inputs or [])
+        return _tag_targeted_cases(cases, normalized_profile, category_label, hint)
+
+    collected: list[TestCaseSchema] = []
+    seen_inputs = _input_key_set(existing_inputs or [])
+    for _ in range(MAX_GENERATION_ATTEMPTS):
+        still_needed = requested_count - len(collected)
+        if still_needed <= 0:
+            break
+        generated: list[TestCaseSchema] = []
+        try:
+            generated = _generate_json_testcases(
+                problem,
+                still_needed,
+                True,
+                normalized_profile,
+                list(seen_inputs),
+                hint,
+                category_label,
+            )
+        except Exception:
+            pass
+        _append_unique_testcases(collected, generated, seen_inputs)
+        still_needed = requested_count - len(collected)
+        if still_needed <= 0:
+            break
+        try:
+            generated = _generate_text_testcases(
+                problem,
+                still_needed,
+                True,
+                normalized_profile,
+                list(seen_inputs),
+                hint,
+                category_label,
+            )
+            _append_unique_testcases(collected, generated, seen_inputs)
+        except Exception:
+            pass
+
+    return _tag_targeted_cases(
+        collected[:requested_count],
+        normalized_profile,
+        category_label,
+        hint,
+    )
+
+
 def generate_single_killer_case(
     problem: ProblemSchema,
     strategy: str,
@@ -290,11 +371,14 @@ def _generate_json_testcases(
     include_edge_cases: bool,
     profile: str,
     existing_inputs: list[str] | None = None,
+    targeted_hint: str = "",
+    targeted_category: str = "",
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
     profile_guidance = _profile_guidance(profile)
     type_context = _problem_type_context(problem, profile)
     existing_inputs_guidance = _existing_inputs_guidance(existing_inputs or [], profile)
+    targeted_guidance = _targeted_guidance(targeted_hint, targeted_category)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
 
@@ -313,6 +397,7 @@ the scenarios included in that one stdin.
 {profile_guidance}
 {type_context}
 {existing_inputs_guidance}
+{targeted_guidance}
 If official samples are included, they count toward {count}; fill all remaining
 slots with newly generated, distinct inputs.
 
@@ -341,11 +426,14 @@ def _generate_text_testcases(
     include_edge_cases: bool,
     profile: str,
     existing_inputs: list[str] | None = None,
+    targeted_hint: str = "",
+    targeted_category: str = "",
 ) -> list[TestCaseSchema]:
     edge_case_text = " including edge cases" if include_edge_cases else ""
     profile_guidance = _profile_guidance(profile)
     type_context = _problem_type_context(problem, profile)
     existing_inputs_guidance = _existing_inputs_guidance(existing_inputs or [], profile)
+    targeted_guidance = _targeted_guidance(targeted_hint, targeted_category)
     prompt = f"""
 You are an expert at generating test cases for competitive programming problems.
 
@@ -364,6 +452,7 @@ the scenarios included in that one stdin.
 {profile_guidance}
 {type_context}
 {existing_inputs_guidance}
+{targeted_guidance}
 If official samples are included, they count toward {count}; fill all remaining
 slots with newly generated, distinct inputs.
 
@@ -407,6 +496,37 @@ def _generate_random_killer_cases(
             case.description = "[KILLER] " + case.description
         case.is_edge_case = True
     return cases
+
+
+def _targeted_guidance(hint: str, category: str) -> str:
+    if not hint and not category:
+        return ""
+    category_text = category or "targeted"
+    return f"""
+Targeted coverage category: {category_text}
+Coverage hint: {hint or CATEGORY_PROMPT_HINTS.get(category_text, "")}
+Every description MUST include the literal category word "{category_text}".
+"""
+
+
+def _tag_targeted_cases(
+    cases: list[TestCaseSchema],
+    profile: str,
+    category: str,
+    hint: str,
+) -> list[TestCaseSchema]:
+    tagged: list[TestCaseSchema] = []
+    category_label = category or "targeted"
+    for case in cases or []:
+        if case is None:
+            continue
+        description = (case.description or "").strip()
+        prefix = f"[{profile}] {category_label}"
+        case.description = prefix if not description else f"{prefix} - {description}"
+        if category_label in {"boundary", "edge_structural", "performance"}:
+            case.is_edge_case = True
+        tagged.append(case)
+    return tagged
 
 
 def _killer_strategies_for(problem: ProblemSchema) -> list[str]:

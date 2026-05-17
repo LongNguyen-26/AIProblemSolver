@@ -48,6 +48,10 @@
         </columns>
     </TableView>
 
+    <Label fx:id="coverageLabel"
+           text="Coverage: -"
+           styleClass="summary-label"/>
+
     <TitledPane text="Chi tiet test case da chon" expanded="false">
         <GridPane hgap="10.0" vgap="8.0">
             <padding>

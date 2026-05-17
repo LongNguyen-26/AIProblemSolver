@@ -27,7 +27,11 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -44,22 +48,27 @@ public class TestCaseController implements Initializable {
     @FXML private TextArea detailInputArea;
     @FXML private TextArea detailExpectedArea;
     @FXML private TextArea detailActualArea;
+    @FXML private Label coverageLabel;
 
     private final ObservableList<TestCase> testCases = FXCollections.observableArrayList();
     private final ReportService reportService = new ReportService();
+    private final Map<String, Integer> requiredCoverage = new LinkedHashMap<>();
     private Consumer<List<TestCase>> testCasesUpdatedListener = updated -> {
     };
     private boolean updatingDetails;
 
     @Override
     public void initialize(URL url, ResourceBundle resourceBundle) {
+        setupCoverageRequirements();
         setupTable();
         setupSelectionDetails();
+        updateCoverageSummary();
     }
 
     public void setTestCases(List<TestCase> values) {
         testCases.setAll(values == null ? List.of() : values);
         clearDetails();
+        updateCoverageSummary();
     }
 
     public List<TestCase> getTestCases() {
@@ -74,6 +83,7 @@ public class TestCaseController implements Initializable {
     public void refreshTable() {
         testCaseTable.refresh();
         displayDetails(testCaseTable.getSelectionModel().getSelectedItem());
+        updateCoverageSummary();
     }
 
     @FXML
@@ -125,6 +135,7 @@ public class TestCaseController implements Initializable {
 
         dialog.showAndWait().ifPresent(testCase -> {
             testCases.add(testCase);
+            updateCoverageSummary();
             notifyTestCasesUpdated();
         });
     }
@@ -138,7 +149,17 @@ public class TestCaseController implements Initializable {
         }
         testCases.remove(selected);
         clearDetails();
+        updateCoverageSummary();
         notifyTestCasesUpdated();
+    }
+
+    private void setupCoverageRequirements() {
+        requiredCoverage.put("sample", 1);
+        requiredCoverage.put("boundary", 2);
+        requiredCoverage.put("edge_structural", 2);
+        requiredCoverage.put("adversarial", 3);
+        requiredCoverage.put("stress_random", 2);
+        requiredCoverage.put("performance", 3);
     }
 
     @FXML
@@ -272,7 +293,86 @@ public class TestCaseController implements Initializable {
     }
 
     private void notifyTestCasesUpdated() {
+        updateCoverageSummary();
         testCasesUpdatedListener.accept(List.copyOf(testCases));
+    }
+
+    private void updateCoverageSummary() {
+        if (coverageLabel == null) {
+            return;
+        }
+        Map<String, Integer> coverage = new LinkedHashMap<>();
+        for (String category : requiredCoverage.keySet()) {
+            coverage.put(category, 0);
+        }
+        for (TestCase testCase : testCases) {
+            String category = inferCategory(testCase);
+            coverage.put(category, coverage.getOrDefault(category, 0) + 1);
+        }
+
+        int complete = 0;
+        List<String> missing = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : requiredCoverage.entrySet()) {
+            int have = coverage.getOrDefault(entry.getKey(), 0);
+            int need = entry.getValue();
+            if (have >= need) {
+                complete++;
+            } else {
+                missing.add(entry.getKey() + " " + have + "/" + need);
+            }
+        }
+
+        if (missing.isEmpty()) {
+            coverageLabel.setText("Coverage: " + complete + "/" + requiredCoverage.size()
+                    + " loai - OK");
+            coverageLabel.setStyle("-fx-text-fill: #7bd88f; -fx-font-weight: bold;");
+        } else {
+            coverageLabel.setText("Coverage: " + complete + "/" + requiredCoverage.size()
+                    + " loai - thieu: " + String.join(", ", missing));
+            coverageLabel.setStyle("-fx-text-fill: #e5b567; -fx-font-weight: bold;");
+        }
+    }
+
+    private String inferCategory(TestCase testCase) {
+        String description = valueOrEmpty(testCase == null ? null : testCase.getDescription())
+                .toLowerCase(Locale.ROOT);
+        if (description.contains("sample") || description.contains("official")) {
+            return "sample";
+        }
+        if (description.contains("performance")
+                || description.contains("killer")
+                || description.contains("[killer]")
+                || description.contains("maximum-size")
+                || description.contains("max-size")) {
+            return "performance";
+        }
+        if (description.contains("boundary")
+                || description.contains("minimum")
+                || description.contains("maximum")
+                || description.contains("n=1")
+                || description.contains("n=max")
+                || description.contains("min/max")) {
+            return "boundary";
+        }
+        if (description.contains("edge_structural")
+                || description.contains("structural")
+                || description.contains("edge")
+                || description.contains("all equal")
+                || description.contains("all-equal")
+                || description.contains("empty")
+                || description.contains("single")
+                || description.contains("sorted")
+                || description.contains("star")
+                || description.contains("chain")
+                || description.contains("bamboo")) {
+            return "edge_structural";
+        }
+        if (description.contains("stress_random")
+                || description.contains("random")
+                || description.contains("smoke")) {
+            return "stress_random";
+        }
+        return "adversarial";
     }
 
     private String valueOrEmpty(String value) {

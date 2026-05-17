@@ -1,4 +1,5 @@
 import asyncio
+import asyncio
 import re
 from enum import Enum
 
@@ -10,14 +11,23 @@ from models.schemas import (
 )
 from services.problem_analyzer import analyze_problem
 from services.problem_cache import load_cache, save_cache
+from services.testcase_coverage_checker import (
+    REQUIRED_TESTCASE_TAXONOMY,
+    TestcaseCoverageChecker,
+)
 from services.testcase_generator import (
+    CATEGORY_PROMPT_HINTS,
     KILLER_STRATEGIES,
     generate_single_killer_case,
     generate_testcases,
+    generate_with_hint,
 )
 
 
 MAX_KILLER_RETRIES = 3
+MIN_COVERAGE_TESTCASES = sum(
+    item["min_count"] for item in REQUIRED_TESTCASE_TAXONOMY.values()
+)
 
 
 class PipelineState(Enum):
@@ -36,7 +46,7 @@ class PipelineState(Enum):
 class PipelineOrchestrator:
     def __init__(self, request: PipelineRequest):
         self.request = request
-        self.target = max(1, min(request.count or 10, 50))
+        self.target = max(MIN_COVERAGE_TESTCASES, min(request.count or 10, 50))
         self.warnings: list[str] = []
         self.problem_text = request.problem_text or ""
         if len(self.problem_text) > 50000:
@@ -142,6 +152,14 @@ class PipelineOrchestrator:
                 88,
             )
             self._quality_gate(plan.killer_count)
+
+            yield self._progress(
+                PipelineState.QUALITY_GATE,
+                "Dang bo sung coverage testcase con thieu...",
+                92,
+            )
+            self._fill_coverage_gaps()
+            self._prioritize_cases_for_coverage()
 
             all_cases = self._all_cases()[: self.target]
             payload = {
@@ -296,6 +314,133 @@ class PipelineOrchestrator:
 
         return promoted[:count]
 
+    def _fill_coverage_gaps(self) -> None:
+        if self.problem is None:
+            return
+
+        checker = TestcaseCoverageChecker()
+        report = checker.check_coverage(self._all_cases(), self.problem)
+        if report["complete"]:
+            return
+
+        for missing in report["missing"]:
+            category = missing["category"]
+            needed = int(missing["need"]) - int(missing["have"])
+            if needed <= 0:
+                continue
+            profile = missing["profiles"][0]
+            new_cases = self._generate_targeted_cases(category, needed, profile)
+            if not new_cases:
+                self.warnings.append(
+                    f"Coverage top-up failed for {category}: needed {needed}."
+                )
+                continue
+            self._add_cases_to_profile(profile, new_cases)
+
+    def _generate_targeted_cases(
+        self,
+        category: str,
+        count: int,
+        profile: str,
+    ) -> list[TestCaseSchema]:
+        if self.problem is None or count <= 0:
+            return []
+
+        if category == "sample":
+            return self._sample_cases(count)
+
+        hint = CATEGORY_PROMPT_HINTS.get(category, category)
+        try:
+            return generate_with_hint(
+                self.problem,
+                count,
+                profile,
+                hint,
+                _inputs_of(self._all_cases()),
+                category,
+            )
+        except Exception as exc:
+            self.warnings.append(f"Targeted {category} generation failed: {exc}")
+            return []
+
+    def _sample_cases(self, count: int) -> list[TestCaseSchema]:
+        seen = {_input_key(value) for value in _inputs_of(self._all_cases())}
+        cases: list[TestCaseSchema] = []
+        for index, sample_input in enumerate(self.problem.sample_inputs if self.problem else []):
+            if len(cases) >= count:
+                break
+            key = _input_key(sample_input or "")
+            if not key:
+                continue
+            existing = self._find_case_by_input_key(key)
+            if existing:
+                existing.description = (
+                    f"[SMALL] sample - official sample test case {index + 1}"
+                )
+                cases.append(existing)
+                seen.add(key)
+                continue
+            if key in seen:
+                continue
+            cases.append(
+                TestCaseSchema(
+                    id=f"tc_sample_{index + 1}",
+                    input=sample_input.strip(),
+                    expected_output="",
+                    description=f"[SMALL] sample - official sample test case {index + 1}",
+                    is_edge_case=False,
+                )
+            )
+            seen.add(key)
+        return cases
+
+    def _find_case_by_input_key(self, key: str) -> TestCaseSchema | None:
+        for case in self._all_cases():
+            if _input_key(case.input if case else "") == key:
+                return case
+        return None
+
+    def _add_cases_to_profile(self, profile: str, cases: list[TestCaseSchema]) -> None:
+        profile_value = (profile or "SMALL").upper()
+        if profile_value == "KILLER":
+            self.killer_cases = _merge_unique_cases(self.killer_cases, cases)
+        elif profile_value == "MEDIUM":
+            self.medium_cases = _merge_unique_cases(self.medium_cases, cases)
+        else:
+            self.small_cases = _merge_unique_cases(self.small_cases, cases)
+
+    def _prioritize_cases_for_coverage(self) -> None:
+        checker = TestcaseCoverageChecker()
+        small_priority = {
+            "sample": 0,
+            "boundary": 1,
+            "edge_structural": 2,
+            "stress_random": 3,
+            "adversarial": 4,
+            "performance": 5,
+        }
+        medium_priority = {
+            "adversarial": 0,
+            "stress_random": 1,
+            "boundary": 2,
+            "edge_structural": 3,
+            "sample": 4,
+            "performance": 5,
+        }
+        killer_priority = {"performance": 0}
+        self.small_cases = sorted(
+            _merge_unique_cases(self.small_cases),
+            key=lambda case: small_priority.get(checker.infer_category(case), 9),
+        )
+        self.medium_cases = sorted(
+            _merge_unique_cases(self.medium_cases),
+            key=lambda case: medium_priority.get(checker.infer_category(case), 9),
+        )
+        self.killer_cases = sorted(
+            _merge_unique_cases(self.killer_cases),
+            key=lambda case: killer_priority.get(checker.infer_category(case), 9),
+        )
+
     def _safe_generate_cases(
         self,
         count: int,
@@ -357,7 +502,7 @@ class PipelineOrchestrator:
         )
 
     def _all_cases(self) -> list[TestCaseSchema]:
-        return self.small_cases + self.medium_cases + self.killer_cases
+        return _merge_unique_cases(self.small_cases, self.medium_cases, self.killer_cases)
 
 
 def _cases_from_response(response) -> list[TestCaseSchema]:
@@ -445,20 +590,17 @@ def _extract_numbers(value: str) -> list[int]:
 
 
 def _build_test_pyramid_plan(total: int):
-    if total == 1:
-        return TestPyramidPlan(1, 0, 0)
-    small = max(1, round(total * 0.2))
-    medium = max(1, round(total * 0.4))
-    killer = total - small - medium
-    if killer < 0:
-        medium = max(0, medium + killer)
-        killer = 0
-    if total >= 3 and killer == 0:
-        if medium > 1:
-            medium -= 1
+    total = max(MIN_COVERAGE_TESTCASES, total)
+    small = max(7, round(total * 0.35))
+    killer = max(3, round(total * 0.25))
+    medium = total - small - killer
+    if medium < 3:
+        shortage = 3 - medium
+        if small - shortage >= 7:
+            small -= shortage
         else:
-            small = max(1, small - 1)
-        killer = 1
+            killer = max(3, killer - shortage)
+        medium = total - small - killer
     return TestPyramidPlan(small, medium, killer)
 
 

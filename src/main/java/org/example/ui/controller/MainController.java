@@ -39,6 +39,7 @@ import java.util.concurrent.CompletableFuture;
 
 public class MainController implements Initializable {
     private static final String EXPECTED_OUTPUT_LANGUAGE = "cpp";
+    private static final int MIN_COVERAGE_TESTCASE_COUNT = 13;
 
     @FXML private Label serviceStatusLabel;
     @FXML private Label statusLabel;
@@ -1243,25 +1244,18 @@ public class MainController implements Initializable {
     }
 
     private TestPyramidPlan buildTestPyramidPlan(int requestedCount) {
-        int total = Math.max(1, requestedCount);
-        if (total == 1) {
-            return new TestPyramidPlan(1, 0, 0, 1);
-        }
-
-        int small = Math.max(1, (int) Math.round(total * 0.2));
-        int medium = Math.max(1, (int) Math.round(total * 0.4));
-        int killer = total - small - medium;
-        if (killer < 0) {
-            medium = Math.max(0, medium + killer);
-            killer = 0;
-        }
-        if (total >= 3 && killer == 0) {
-            if (medium > 1) {
-                medium--;
+        int total = Math.max(MIN_COVERAGE_TESTCASE_COUNT, requestedCount);
+        int small = Math.max(7, (int) Math.round(total * 0.35));
+        int killer = Math.max(3, (int) Math.round(total * 0.25));
+        int medium = total - small - killer;
+        if (medium < 3) {
+            int shortage = 3 - medium;
+            if (small - shortage >= 7) {
+                small -= shortage;
             } else {
-                small = Math.max(1, small - 1);
+                killer = Math.max(3, killer - shortage);
             }
-            killer = 1;
+            medium = total - small - killer;
         }
         return new TestPyramidPlan(small, medium, killer, total);
     }
