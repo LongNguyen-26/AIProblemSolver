@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from models.schemas import StressRequest, StressResult
 from services.stress_testing_agent import StressTestingAgent
@@ -15,4 +15,11 @@ async def stress(request: StressRequest):
             rounds=request.rounds,
         )
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        return StressResult(
+            trusted=False,
+            trusted_oracle_language="python",
+            rounds_completed=0,
+            generator_trusted=False,
+            message=f"Stress agent gap loi: {exc}. Dung fallback oracle neu co.",
+            problem_type="general",
+        )

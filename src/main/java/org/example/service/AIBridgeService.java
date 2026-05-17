@@ -13,6 +13,11 @@ import org.example.model.TestCase;
 import org.example.util.AppConfig;
 import org.example.util.HttpUtil;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -25,12 +30,17 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 
 public class AIBridgeService {
     private static final int MAX_TESTCASE_ATTEMPTS = 3;
+    private static final int SSE_EVENT_TIMEOUT_SECONDS = 30;
 
     private final String baseUrl;
     private final Gson gson = new Gson();
@@ -248,6 +258,31 @@ public class AIBridgeService {
             String languagePreference,
             Consumer<PipelineProgress> onProgress
     ) throws Exception {
+        try {
+            return runPipelineSse(
+                    problemText,
+                    count,
+                    includeEdgeCases,
+                    languagePreference,
+                    onProgress
+            );
+        } catch (Exception e) {
+            return runLegacyAnalyzeFallback(
+                    problemText,
+                    count,
+                    includeEdgeCases,
+                    rootCauseMessage(e)
+            );
+        }
+    }
+
+    private PipelineProgress runPipelineSse(
+            String problemText,
+            int count,
+            boolean includeEdgeCases,
+            String languagePreference,
+            Consumer<PipelineProgress> onProgress
+    ) throws Exception {
         Map<String, Object> body = new HashMap<>();
         body.put("problem_text", problemText == null ? "" : problemText);
         body.put("count", count);
@@ -269,19 +304,44 @@ public class AIBridgeService {
                 ))
                 .build();
 
-        HttpResponse<Stream<String>> response = streamingClient.send(
+        HttpResponse<InputStream> response = streamingClient.send(
                 request,
-                HttpResponse.BodyHandlers.ofLines()
+                HttpResponse.BodyHandlers.ofInputStream()
         );
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             throw new RuntimeException("HTTP " + response.statusCode());
         }
 
         AtomicReference<PipelineProgress> latest = new AtomicReference<>();
-        try (Stream<String> lines = response.body()) {
-            lines.forEach(line -> {
+        ExecutorService lineReader = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "pipeline-sse-reader");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try (InputStream bodyStream = response.body();
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(bodyStream, StandardCharsets.UTF_8)
+             )) {
+            while (true) {
+                Future<String> nextLine = lineReader.submit(reader::readLine);
+                String line;
+                try {
+                    line = nextLine.get(SSE_EVENT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    nextLine.cancel(true);
+                    closeQuietly(bodyStream);
+                    throw new SocketTimeoutException(
+                            "No pipeline SSE event for "
+                                    + SSE_EVENT_TIMEOUT_SECONDS
+                                    + " seconds"
+                    );
+                }
+
+                if (line == null) {
+                    break;
+                }
                 if (line == null || !line.startsWith("data: ")) {
-                    return;
+                    continue;
                 }
                 String json = line.substring("data: ".length());
                 PipelineProgress progress = gson.fromJson(json, PipelineProgress.class);
@@ -289,9 +349,95 @@ public class AIBridgeService {
                 if (onProgress != null) {
                     onProgress.accept(progress);
                 }
-            });
+            }
+        } finally {
+            lineReader.shutdownNow();
         }
         return latest.get();
+    }
+
+    private PipelineProgress runLegacyAnalyzeFallback(
+            String problemText,
+            int count,
+            boolean includeEdgeCases,
+            String failureMessage
+    ) {
+        List<String> warnings = new ArrayList<>();
+        warnings.add("Pipeline fallback: " + valueOrDefault(failureMessage, "unknown error"));
+
+        Problem problem;
+        boolean analyzed = false;
+        try {
+            problem = analyzeProblemText(problemText);
+            analyzed = true;
+        } catch (Exception e) {
+            problem = fallbackProblem(problemText);
+            warnings.add("Legacy analyze failed: " + rootCauseMessage(e));
+        }
+
+        List<TestCase> testCases = List.of();
+        if (analyzed) {
+            try {
+                testCases = generateTestCases(
+                        problem,
+                        Math.max(1, count),
+                        includeEdgeCases,
+                        "SMALL"
+                );
+            } catch (Exception e) {
+                warnings.add("Legacy testcase failed: " + rootCauseMessage(e));
+            }
+        }
+
+        PipelineProgress progress = new PipelineProgress();
+        progress.setState("DONE");
+        progress.setProgressPct(100);
+        progress.setTestcasesReady(testCases.size());
+        progress.setTestcasesTarget(Math.max(1, count));
+        progress.setWarnings(warnings);
+        progress.setProblem(problem);
+        progress.setAllTestCases(testCases);
+        progress.setCached(false);
+        progress.setMessage(analyzed
+                ? "Pipeline gap su co; da dung luong legacy /analyze + /testcase."
+                : "Service offline, thu lai sau.");
+        return progress;
+    }
+
+    private Problem fallbackProblem(String problemText) {
+        Problem problem = new Problem();
+        problem.setTitle("Problem (unparsed)");
+        problem.setDescription(valueOrDefault(problemText, "No problem text was parsed."));
+        problem.setInputFormat("");
+        problem.setOutputFormat("");
+        problem.setConstraints(List.of());
+        problem.setSampleInputs(List.of());
+        problem.setSampleOutputs(List.of());
+        problem.setProblemType("UNKNOWN");
+        problem.setSecondaryType("");
+        problem.setTypeConfidence(0.0);
+        problem.setTleStrategy("");
+        return problem;
+    }
+
+    private void closeQuietly(InputStream stream) {
+        try {
+            stream.close();
+        } catch (IOException ignored) {
+            // Closing the stream is only used to unblock a timed-out SSE read.
+        }
+    }
+
+    private String rootCauseMessage(Throwable error) {
+        Throwable cursor = error;
+        while (cursor.getCause() != null) {
+            cursor = cursor.getCause();
+        }
+        return cursor.getMessage() == null ? cursor.toString() : cursor.getMessage();
+    }
+
+    private String valueOrDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private String normalizeBaseUrl(String value) {

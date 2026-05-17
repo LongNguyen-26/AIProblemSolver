@@ -161,7 +161,12 @@ public class MainController implements Initializable {
                 .whenCompleteAsync((result, error) -> {
                     try {
                         if (error != null) {
-                            showError(rootCauseMessage(error));
+                            setStatus("Phan tich gap su co, thu lai sau: "
+                                    + rootCauseMessage(error));
+                            return;
+                        }
+                        if (result == null) {
+                            setStatus("Phan tich gap su co, thu lai sau.");
                             return;
                         }
                         currentProblem = result.problem;
@@ -191,14 +196,21 @@ public class MainController implements Initializable {
     private AnalyzeResult analyzeAndGenerate(boolean imageMode, String text, String imageBase64,
                                              int testCaseCount, boolean includeEdgeCases) {
         try {
-            Problem problem = imageMode
-                    ? aiService.analyzeProblemImage(imageBase64)
-                    : null;
-
             if (!imageMode) {
-                return analyzeAndGenerateWithPipeline(text, testCaseCount, includeEdgeCases);
+                try {
+                    return analyzeAndGenerateWithPipeline(text, testCaseCount, includeEdgeCases);
+                } catch (Exception pipelineError) {
+                    setStatusAsync("Pipeline gap su co, dang thu luong legacy...");
+                    return analyzeAndGenerateLegacyText(
+                            text,
+                            testCaseCount,
+                            includeEdgeCases,
+                            rootCauseMessage(pipelineError)
+                    );
+                }
             }
 
+            Problem problem = aiService.analyzeProblemImage(imageBase64);
             TestPyramidPlan plan = buildTestPyramidPlan(testCaseCount);
 
             setStatusAsync("Dang sinh input nho de stress brute-force...");
@@ -206,21 +218,59 @@ public class MainController implements Initializable {
                     problem, plan.smallCount(), includeEdgeCases, "SMALL"
             );
             if (smallCases.isEmpty()) {
-                throw new RuntimeException("AI did not generate runnable input test cases.");
+                return new AnalyzeResult(
+                        problem,
+                        List.of(),
+                        "Phan tich xong mot phan - chua sinh duoc testcase input.",
+                        null
+                );
             }
 
-            ExpectedBatch batch = buildStressTestCases(
-                    problem, smallCases, plan, includeEdgeCases
-            );
-            return new AnalyzeResult(
+            return buildExpectedBatchOrFallback(
                     problem,
-                    batch.testCases(),
-                    batch.message(),
-                    batch.preferredAcSubmission()
+                    smallCases,
+                    List.of(),
+                    List.of(),
+                    plan,
+                    includeEdgeCases,
+                    ""
             );
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            setStatusAsync("Phan tich gap su co, da giu trang thai an toan.");
+            return buildBestEffortAnalyzeResult(imageMode, text, rootCauseMessage(e));
         }
+    }
+
+    private AnalyzeResult analyzeAndGenerateLegacyText(
+            String text,
+            int testCaseCount,
+            boolean includeEdgeCases,
+            String previousFailure
+    ) throws Exception {
+        setStatusAsync("Dang chay legacy /analyze + /testcase...");
+        Problem problem = aiService.analyzeProblemText(text);
+        TestPyramidPlan plan = buildTestPyramidPlan(testCaseCount);
+        List<TestCase> smallCases = generateProfileCases(
+                problem, plan.smallCount(), includeEdgeCases, "SMALL"
+        );
+        if (smallCases.isEmpty()) {
+            return new AnalyzeResult(
+                    problem,
+                    List.of(),
+                    "Phan tich xong mot phan - chua sinh duoc testcase input"
+                            + nonBlankSuffix(previousFailure),
+                    null
+            );
+        }
+        return buildExpectedBatchOrFallback(
+                problem,
+                smallCases,
+                List.of(),
+                List.of(),
+                plan,
+                includeEdgeCases,
+                previousFailure
+        );
     }
 
     private AnalyzeResult analyzeAndGenerateWithPipeline(
@@ -238,14 +288,29 @@ public class MainController implements Initializable {
         );
 
         if (done == null) {
-            throw new RuntimeException("Pipeline did not return progress.");
+            return analyzeAndGenerateLegacyText(
+                    text,
+                    testCaseCount,
+                    includeEdgeCases,
+                    "Pipeline did not return progress."
+            );
         }
         if ("ERROR".equals(valueOrEmpty(done.getState()))) {
-            throw new RuntimeException(valueOrEmpty(done.getMessage()));
+            return analyzeAndGenerateLegacyText(
+                    text,
+                    testCaseCount,
+                    includeEdgeCases,
+                    valueOrEmpty(done.getMessage())
+            );
         }
         Problem problem = done.getProblem();
         if (problem == null) {
-            throw new RuntimeException("Pipeline did not return analyzed problem.");
+            return analyzeAndGenerateLegacyText(
+                    text,
+                    testCaseCount,
+                    includeEdgeCases,
+                    "Pipeline did not return analyzed problem."
+            );
         }
 
         TestPyramidPlan plan = buildTestPyramidPlan(testCaseCount);
@@ -254,22 +319,38 @@ public class MainController implements Initializable {
                 ? generateProfileCases(problem, plan.smallCount(), includeEdgeCases, "SMALL")
                 : takeCases(sanitizeTestCases(buckets.smallCases()), plan.smallCount());
         if (smallCases.isEmpty()) {
-            throw new RuntimeException("Pipeline did not generate runnable SMALL input cases.");
+            List<TestCase> fallbackCases = markExpectedOutputsUnavailable(
+                    takeCases(
+                            mergeUniqueCases(
+                                    buckets.smallCases(),
+                                    buckets.mediumCases(),
+                                    buckets.killerCases()
+                            ),
+                            plan.totalCount()
+                    )
+            );
+            return new AnalyzeResult(
+                    problem,
+                    fallbackCases,
+                    "Phan tich xong mot phan - pipeline chua sinh duoc SMALL testcase runnable.",
+                    null
+            );
         }
         tagProfileCases(smallCases, "SMALL");
 
         setProgressAsync(92);
         setStatusAsync("Pipeline da sinh input; dang tinh Expected Output...");
-        ExpectedBatch batch = buildStressTestCases(
+        AnalyzeResult result = buildExpectedBatchOrFallback(
                 problem,
                 smallCases,
                 buckets.mediumCases(),
                 buckets.killerCases(),
                 plan,
-                includeEdgeCases
+                includeEdgeCases,
+                ""
         );
 
-        String message = batch.message();
+        String message = result.message;
         if (done.isCached()) {
             message += "; dung cache pipeline";
         }
@@ -280,9 +361,9 @@ public class MainController implements Initializable {
         setProgressAsync(100);
         return new AnalyzeResult(
                 problem,
-                batch.testCases(),
+                result.testCases,
                 message,
-                batch.preferredAcSubmission()
+                result.preferredAcSubmission
         );
     }
 
@@ -296,6 +377,80 @@ public class MainController implements Initializable {
             message = valueOrEmpty(progress.getState());
         }
         setStatusAsync(message);
+    }
+
+    private AnalyzeResult buildExpectedBatchOrFallback(
+            Problem problem,
+            List<TestCase> smallCases,
+            List<TestCase> seededMediumCases,
+            List<TestCase> seededKillerCases,
+            TestPyramidPlan plan,
+            boolean includeEdgeCases,
+            String previousFailure
+    ) {
+        try {
+            ExpectedBatch batch = buildStressTestCases(
+                    problem,
+                    smallCases,
+                    seededMediumCases,
+                    seededKillerCases,
+                    plan,
+                    includeEdgeCases
+            );
+            String message = batch.message();
+            if (previousFailure != null && !previousFailure.isBlank()) {
+                message += "; fallback: " + previousFailure;
+            }
+            return new AnalyzeResult(
+                    problem,
+                    batch.testCases(),
+                    message,
+                    batch.preferredAcSubmission()
+            );
+        } catch (Exception e) {
+            List<TestCase> fallbackCases = markExpectedOutputsUnavailable(
+                    takeCases(
+                            mergeUniqueCases(smallCases, seededMediumCases, seededKillerCases),
+                            plan.totalCount()
+                    )
+            );
+            return new AnalyzeResult(
+                    problem,
+                    fallbackCases,
+                    "Phan tich xong mot phan - khong tinh duoc Expected Output; "
+                            + "da danh dau N/A"
+                            + nonBlankSuffix(previousFailure)
+                            + nonBlankSuffix(rootCauseMessage(e)),
+                    null
+            );
+        }
+    }
+
+    private AnalyzeResult buildBestEffortAnalyzeResult(
+            boolean imageMode,
+            String text,
+            String failureMessage
+    ) {
+        Problem problem = new Problem();
+        problem.setTitle("Problem (unparsed)");
+        problem.setDescription(imageMode
+                ? "Image input could not be analyzed because the AI service failed."
+                : valueOrEmpty(text));
+        problem.setInputFormat("");
+        problem.setOutputFormat("");
+        problem.setConstraints(List.of());
+        problem.setSampleInputs(List.of());
+        problem.setSampleOutputs(List.of());
+        problem.setProblemType("UNKNOWN");
+        problem.setSecondaryType("");
+        problem.setTypeConfidence(0.0);
+        problem.setTleStrategy("");
+        return new AnalyzeResult(
+                problem,
+                List.of(),
+                "Service offline, thu lai sau" + nonBlankSuffix(failureMessage),
+                null
+        );
     }
 
     private ExpectedBatch buildStressTestCases(
@@ -477,21 +632,38 @@ public class MainController implements Initializable {
             }
 
             String message = valueOrEmpty(stressResult.getMessage());
-            if (!stressResult.isTrusted()
-                    || stressResult.getTrustedOracleCode() == null
-                    || stressResult.getTrustedOracleCode().isBlank()) {
+            boolean hasFallbackOracle = stressResult.getTrustedOracleCode() != null
+                    && !stressResult.getTrustedOracleCode().isBlank();
+            String language = valueOrEmpty(stressResult.getTrustedOracleLanguage()).isBlank()
+                    ? "python"
+                    : stressResult.getTrustedOracleLanguage();
+            if (!stressResult.isTrusted() || !hasFallbackOracle) {
                 if (stressResult.isFoundCounterexample()) {
                     message = "found counterexample during stress";
                 } else if (message.isBlank()) {
                     message = "oracle was not trusted";
                 }
+                if (hasFallbackOracle && !stressResult.isFoundCounterexample()) {
+                    setStatusAsync("Canh bao: stress agent fallback oracle - " + message);
+                    OracleRun oracle = new OracleRun(
+                            "STRESS_AGENT_FALLBACK",
+                            stressResult.getTrustedOracleCode(),
+                            language,
+                            inputsOf(verifiedSmallCases),
+                            verifiedSmallCases.stream()
+                                    .map(TestCase::getExpectedOutput)
+                                    .toList()
+                    );
+                    return new StressOracleResult(
+                            oracle,
+                            message,
+                            stressResult.getRoundsCompleted()
+                    );
+                }
                 setStatusAsync("Canh bao: stress agent khong trust oracle - " + message);
                 return new StressOracleResult(null, message, stressResult.getRoundsCompleted());
             }
 
-            String language = valueOrEmpty(stressResult.getTrustedOracleLanguage()).isBlank()
-                    ? "python"
-                    : stressResult.getTrustedOracleLanguage();
             OracleRun oracle = new OracleRun(
                     "STRESS_AGENT",
                     stressResult.getTrustedOracleCode(),
@@ -856,22 +1028,37 @@ public class MainController implements Initializable {
     }
 
     private void fillExpectedOutputs(List<TestCase> testCases, List<String> outputs) {
-        if (outputs.size() != testCases.size()) {
-            throw new IllegalStateException("Oracle output count does not match test case count.");
-        }
+        List<String> safeOutputs = outputs == null ? List.of() : outputs;
         for (int i = 0; i < testCases.size(); i++) {
             TestCase testCase = testCases.get(i);
-            String output = expectedOutputExecutionService.normalizeOutput(outputs.get(i));
+            String rawOutput = i < safeOutputs.size() ? safeOutputs.get(i) : "N/A";
+            String output = expectedOutputExecutionService.normalizeOutput(rawOutput);
             if (output.isBlank()) {
-                throw new IllegalStateException(
-                        "Oracle produced blank Expected Output for input #" + (i + 1)
-                );
+                output = "N/A";
             }
             testCase.setExpectedOutput(output);
             testCase.setActualOutput("");
             testCase.setVerdict("");
             testCase.setExecutionTimeMs(0);
         }
+    }
+
+    private List<TestCase> markExpectedOutputsUnavailable(List<TestCase> testCases) {
+        List<TestCase> result = new ArrayList<>();
+        for (TestCase testCase : testCases == null ? List.<TestCase>of() : testCases) {
+            if (testCase == null) {
+                continue;
+            }
+            if (testCase.getExpectedOutput() == null
+                    || testCase.getExpectedOutput().isBlank()) {
+                testCase.setExpectedOutput("N/A");
+            }
+            testCase.setActualOutput("");
+            testCase.setVerdict("");
+            testCase.setExecutionTimeMs(0);
+            result.add(testCase);
+        }
+        return result;
     }
 
     private List<TestCase> applyOutputsToCases(List<TestCase> cases, List<String> outputs) {

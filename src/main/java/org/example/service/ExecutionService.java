@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 
 public class ExecutionService {
     private static final int TIMEOUT_SEC = AppConfig.getInt("execution.timeoutSeconds", 5);
+    private static final String UNAVAILABLE_EXPECTED_OUTPUT = "N/A";
     private static final String SANDBOX = AppConfig.get("execution.sandboxPath").isBlank()
             ? "sandbox"
             : AppConfig.get("execution.sandboxPath");
@@ -115,7 +116,7 @@ public class ExecutionService {
                                         List<String> inputs, String sourceLabel)
             throws Exception {
         if (sourceCode == null || sourceCode.isBlank()) {
-            throw new IllegalArgumentException(sourceLabel + " source code must not be blank");
+            return unavailableOutputs(inputs == null ? 0 : inputs.size());
         }
         if (inputs == null || inputs.isEmpty()) {
             return List.of();
@@ -127,27 +128,29 @@ public class ExecutionService {
 
         CompileResult compileResult = compile(normalizedLanguage, sourceFile);
         if (!compileResult.success()) {
-            throw new IllegalStateException(
-                    sourceLabel + " failed to compile: "
-                            + nonBlank(compileResult.stderr(), compileResult.stdout())
-            );
+            return unavailableOutputs(inputs.size());
         }
 
         List<String> outputs = new ArrayList<>();
         for (int i = 0; i < inputs.size(); i++) {
             RunResult runResult = run(normalizedLanguage, inputs.get(i));
             if (runResult.timedOut()) {
-                throw new IllegalStateException(
-                        sourceLabel + " timed out on input #" + (i + 1)
-                );
+                outputs.add(UNAVAILABLE_EXPECTED_OUTPUT);
+                continue;
             }
             if (runResult.exitCode() != 0) {
-                throw new IllegalStateException(
-                        sourceLabel + " failed on input #" + (i + 1) + ": "
-                                + nonBlank(runResult.stderr(), runResult.stdout())
-                );
+                outputs.add(UNAVAILABLE_EXPECTED_OUTPUT);
+                continue;
             }
             outputs.add(normalizeOutput(runResult.stdout()));
+        }
+        return outputs;
+    }
+
+    private List<String> unavailableOutputs(int count) {
+        List<String> outputs = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            outputs.add(UNAVAILABLE_EXPECTED_OUTPUT);
         }
         return outputs;
     }

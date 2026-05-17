@@ -149,8 +149,9 @@ public class ResultController implements Initializable {
             try {
                 if (error != null) {
                     String message = rootCauseMessage(error);
-                    summaryLabel.setText("Loi sinh code");
-                    AlertUtil.showError(codeArea.getScene().getWindow(), message);
+                    summaryLabel.setText("Sinh code that bai, thu lai");
+                    summaryLabel.setStyle("-fx-text-fill: #e5b567; -fx-font-weight: bold;");
+                    explanationArea.setText(message);
                     return;
                 }
                 displaySubmission(submission);
@@ -473,7 +474,13 @@ public class ResultController implements Initializable {
     }
 
     private void displaySubmission(CodeSubmission submission) {
-        if (submission == null) {
+        if (submission == null || submission.getCode() == null
+                || submission.getCode().isBlank()) {
+            summaryLabel.setText("Sinh code that bai, thu lai");
+            summaryLabel.setStyle("-fx-text-fill: #e5b567; -fx-font-weight: bold;");
+            explanationArea.setText(submission == null
+                    ? "AI service did not return a submission."
+                    : valueOrEmpty(submission.getExplanation()));
             return;
         }
         codeArea.setText(valueOrEmpty(submission.getCode()));

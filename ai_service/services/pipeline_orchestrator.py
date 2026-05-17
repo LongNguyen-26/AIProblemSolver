@@ -29,6 +29,12 @@ class PipelineOrchestrator:
         self.request = request
         self.target = max(1, min(request.count or 10, 50))
         self.warnings: list[str] = []
+        self.problem_text = request.problem_text or ""
+        if len(self.problem_text) > 50000:
+            self.warnings.append(
+                "Problem text qua dai; da cat bot xuong 50000 ky tu de tranh timeout."
+            )
+            self.problem_text = self.problem_text[:50000]
         self.problem: ProblemSchema | None = None
         self.small_cases: list[TestCaseSchema] = []
         self.medium_cases: list[TestCaseSchema] = []
@@ -36,7 +42,7 @@ class PipelineOrchestrator:
 
     async def run(self):
         try:
-            cached = load_cache(self.request.problem_text)
+            cached = load_cache(self.problem_text)
             if cached:
                 yield self._progress_from_cache(cached)
                 return
@@ -46,7 +52,7 @@ class PipelineOrchestrator:
                 "Dang phan tich va phan loai dang bai...",
                 5,
             )
-            self.problem = analyze_problem(self.request.problem_text)
+            self.problem = analyze_problem(self.problem_text)
             yield self._progress(
                 PipelineState.CLASSIFYING,
                 f"Da nhan dien dang bai: {self.problem.problem_type or 'UNKNOWN'}",
@@ -59,13 +65,10 @@ class PipelineOrchestrator:
                 "Dang sinh SMALL test cases theo problem type...",
                 18,
             )
-            self.small_cases = _cases_from_response(
-                generate_testcases(
-                    self.problem,
-                    plan.small_count,
-                    self.request.include_edge_cases,
-                    "SMALL",
-                )
+            self.small_cases = self._safe_generate_cases(
+                plan.small_count,
+                "SMALL",
+                [],
             )
             yield self._progress(
                 PipelineState.VALIDATING_ORACLE,
@@ -83,14 +86,10 @@ class PipelineOrchestrator:
                 "Dang sinh MEDIUM test cases...",
                 60,
             )
-            self.medium_cases = _cases_from_response(
-                generate_testcases(
-                    self.problem,
-                    plan.medium_count,
-                    self.request.include_edge_cases,
-                    "MEDIUM",
-                    _inputs_of(self.small_cases),
-                )
+            self.medium_cases = self._safe_generate_cases(
+                plan.medium_count,
+                "MEDIUM",
+                _inputs_of(self.small_cases),
             )
 
             yield self._progress(
@@ -98,14 +97,10 @@ class PipelineOrchestrator:
                 "Dang sinh KILLER test cases...",
                 75,
             )
-            self.killer_cases = _cases_from_response(
-                generate_testcases(
-                    self.problem,
-                    plan.killer_count,
-                    self.request.include_edge_cases,
-                    "KILLER",
-                    _inputs_of(self.small_cases + self.medium_cases),
-                )
+            self.killer_cases = self._safe_generate_cases(
+                plan.killer_count,
+                "KILLER",
+                _inputs_of(self.small_cases + self.medium_cases),
             )
 
             yield self._progress(
@@ -121,7 +116,7 @@ class PipelineOrchestrator:
                 "all_testcases": [case.model_dump() for case in all_cases],
                 "warnings": self.warnings,
             }
-            save_cache(self.request.problem_text, payload)
+            save_cache(self.problem_text, payload)
 
             yield self._progress(
                 PipelineState.DONE,
@@ -131,10 +126,13 @@ class PipelineOrchestrator:
             )
         except Exception as exc:
             self.warnings.append(str(exc))
+            if self.problem is None:
+                self.problem = _fallback_problem(self.problem_text, str(exc))
             yield self._progress(
-                PipelineState.ERROR,
-                "Pipeline loi: " + str(exc),
+                PipelineState.DONE,
+                "Pipeline gap loi: " + str(exc) + ". Tra ket qua tam thoi.",
                 100,
+                self._all_cases(),
             )
 
     def _quality_gate(self) -> None:
@@ -148,17 +146,35 @@ class PipelineOrchestrator:
             self.warnings.append(
                 "KILLER cases co ve qua nho so voi SMALL cases; da thu regenerate voi profile KILLER."
             )
-            regenerated = _cases_from_response(
-                generate_testcases(
-                    self.problem,
-                    len(self.killer_cases),
-                    self.request.include_edge_cases,
-                    "KILLER",
-                    _inputs_of(self._all_cases()),
-                )
+            regenerated = self._safe_generate_cases(
+                len(self.killer_cases),
+                "KILLER",
+                _inputs_of(self._all_cases()),
             )
             if regenerated:
                 self.killer_cases = regenerated
+
+    def _safe_generate_cases(
+        self,
+        count: int,
+        profile: str,
+        existing_inputs: list[str],
+    ) -> list[TestCaseSchema]:
+        if count <= 0 or self.problem is None:
+            return []
+        try:
+            return _cases_from_response(
+                generate_testcases(
+                    self.problem,
+                    count,
+                    self.request.include_edge_cases,
+                    profile,
+                    existing_inputs,
+                )
+            )
+        except Exception as exc:
+            self.warnings.append(f"{profile} generation failed: {exc}")
+            return []
 
     def _progress(
         self,
@@ -233,6 +249,22 @@ def _build_test_pyramid_plan(total: int):
             small = max(1, small - 1)
         killer = 1
     return TestPyramidPlan(small, medium, killer)
+
+
+def _fallback_problem(text: str, reason: str) -> ProblemSchema:
+    return ProblemSchema(
+        title="Problem (unparsed)",
+        description=text or reason or "Pipeline could not parse the problem statement.",
+        input_format="",
+        output_format="",
+        constraints=[],
+        sample_inputs=[],
+        sample_outputs=[],
+        problem_type="UNKNOWN",
+        secondary_type="",
+        type_confidence=0.0,
+        tle_strategy="",
+    )
 
 
 class TestPyramidPlan:

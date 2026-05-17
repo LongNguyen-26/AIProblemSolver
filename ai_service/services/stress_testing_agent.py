@@ -97,6 +97,8 @@ class PythonExecutor:
 class StressTestingAgent:
     def __init__(self, executor: PythonExecutor | None = None):
         self.executor = executor or PythonExecutor()
+        self.last_brute_code = ""
+        self.rounds_completed = 0
 
     def run(
         self,
@@ -104,87 +106,112 @@ class StressTestingAgent:
         small_cases: list[TestCaseSchema],
         rounds: int = 30,
     ) -> StressResult:
-        normalized_rounds = max(1, min(rounds or 30, 100))
-        usable_small_cases = _usable_small_cases(small_cases)
-        if not usable_small_cases:
-            return StressResult(
-                trusted=False,
-                rounds_completed=0,
-                message="No small cases with expected output were provided.",
-                problem_type=_classify_problem(problem),
-            )
+        problem_type = "general"
+        try:
+            normalized_rounds = max(1, min(rounds or 30, 100))
+            usable_small_cases = _usable_small_cases(small_cases)
+            if not usable_small_cases:
+                return StressResult(
+                    trusted=False,
+                    rounds_completed=0,
+                    message="No small cases with expected output were provided.",
+                    problem_type=_classify_problem(problem),
+                )
 
-        problem_type = _classify_problem(problem)
-        brute = self._get_verified_oracle(
-            problem,
-            "BRUTE",
-            usable_small_cases,
-            DEFAULT_ORACLE_RETRIES,
-        )
-        if not brute.trusted:
+            problem_type = _classify_problem(problem)
+            brute = self._get_verified_oracle(
+                problem,
+                "BRUTE",
+                usable_small_cases,
+                DEFAULT_ORACLE_RETRIES,
+            )
+            if brute.code:
+                self.last_brute_code = brute.code
+            if not brute.trusted:
+                return StressResult(
+                    trusted=False,
+                    trusted_oracle_code=self.last_brute_code,
+                    trusted_oracle_language="python",
+                    rounds_completed=0,
+                    oracle_retries=brute.retries,
+                    message="Brute oracle is not trusted: " + brute.message,
+                    problem_type=problem_type,
+                )
+
+            optimized = self._get_verified_optimized_oracle(
+                problem,
+                usable_small_cases,
+                DEFAULT_ORACLE_RETRIES,
+            )
+            oracle_retries = brute.retries + optimized.retries
+            if not optimized.trusted:
+                return StressResult(
+                    trusted=False,
+                    trusted_oracle_code=brute.code,
+                    trusted_oracle_language="python",
+                    rounds_completed=0,
+                    oracle_retries=oracle_retries,
+                    message=(
+                        "Optimized oracle is not trusted: "
+                        + optimized.message
+                        + ". Dung brute oracle tam thoi."
+                    ),
+                    problem_type=problem_type,
+                )
+
+            generator = self._get_verified_generator(
+                problem,
+                "SMALL",
+                DEFAULT_GENERATOR_RETRIES,
+            )
+            if not generator.trusted:
+                return StressResult(
+                    trusted=False,
+                    trusted_oracle_code=optimized.code,
+                    trusted_oracle_language="python",
+                    rounds_completed=0,
+                    oracle_retries=oracle_retries,
+                    generator_trusted=False,
+                    message="Input generator is not trusted: " + generator.message,
+                    problem_type=problem_type,
+                )
+
+            stress = self._run_stress_loop(
+                brute.code,
+                optimized.code,
+                generator.code,
+                normalized_rounds,
+            )
+            found_counterexample = bool(stress.get("found_counterexample"))
+            self.rounds_completed = int(stress.get("rounds_completed", 0))
             return StressResult(
-                trusted=False,
+                trusted=not found_counterexample,
+                trusted_oracle_code=optimized.code if not found_counterexample else brute.code,
                 trusted_oracle_language="python",
-                rounds_completed=0,
-                oracle_retries=brute.retries,
-                message="Brute oracle is not trusted: " + brute.message,
+                found_counterexample=found_counterexample,
+                counterexample_input=str(stress.get("input", "")),
+                brute_output=str(stress.get("brute_output", "")),
+                optimized_output=str(stress.get("optimized_output", "")),
+                rounds_completed=self.rounds_completed,
+                oracle_retries=oracle_retries,
+                generator_trusted=True,
+                message=str(stress.get("message", "Stress completed.")),
                 problem_type=problem_type,
             )
-
-        optimized = self._get_verified_optimized_oracle(
-            problem,
-            usable_small_cases,
-            DEFAULT_ORACLE_RETRIES,
-        )
-        oracle_retries = brute.retries + optimized.retries
-        if not optimized.trusted:
+        except Exception as exc:
             return StressResult(
                 trusted=False,
+                trusted_oracle_code=self.last_brute_code,
                 trusted_oracle_language="python",
-                rounds_completed=0,
-                oracle_retries=oracle_retries,
-                message="Optimized oracle is not trusted: " + optimized.message,
-                problem_type=problem_type,
-            )
-
-        generator = self._get_verified_generator(
-            problem,
-            "SMALL",
-            DEFAULT_GENERATOR_RETRIES,
-        )
-        if not generator.trusted:
-            return StressResult(
-                trusted=False,
-                trusted_oracle_code=optimized.code,
-                trusted_oracle_language="python",
-                rounds_completed=0,
-                oracle_retries=oracle_retries,
+                rounds_completed=self.rounds_completed,
+                found_counterexample=False,
                 generator_trusted=False,
-                message="Input generator is not trusted: " + generator.message,
+                message=(
+                    f"Stress agent gap loi: {exc}. "
+                    "Dung brute oracle tam thoi neu co."
+                ),
                 problem_type=problem_type,
             )
-
-        stress = self._run_stress_loop(
-            brute.code,
-            optimized.code,
-            generator.code,
-            normalized_rounds,
-        )
-        found_counterexample = bool(stress.get("found_counterexample"))
-        return StressResult(
-            trusted=not found_counterexample,
-            trusted_oracle_code=optimized.code if not found_counterexample else "",
-            trusted_oracle_language="python",
-            found_counterexample=found_counterexample,
-            counterexample_input=str(stress.get("input", "")),
-            brute_output=str(stress.get("brute_output", "")),
-            optimized_output=str(stress.get("optimized_output", "")),
-            rounds_completed=int(stress.get("rounds_completed", 0)),
-            oracle_retries=oracle_retries,
-            generator_trusted=True,
-            message=str(stress.get("message", "Stress completed.")),
-            problem_type=problem_type,
-        )
 
     def _get_verified_optimized_oracle(
         self,

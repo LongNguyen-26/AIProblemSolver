@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from models.schemas import CodeGenRequest, CodeGenResponse
 from services.code_generator import generate_code
@@ -18,4 +18,9 @@ async def codegen(request: CodeGenRequest):
             request.error_log,
         )
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        return CodeGenResponse(
+            code="",
+            language=request.language,
+            type=request.type,
+            explanation=f"Sinh code that bai, thu lai: {exc}",
+        )

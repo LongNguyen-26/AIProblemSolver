@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from models.schemas import TestCaseRequest, TestCaseResponse
 from services.testcase_generator import generate_testcases
@@ -17,5 +17,5 @@ async def testcase(request: TestCaseRequest):
             request.profile,
             request.existing_inputs,
         )
-    except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+    except Exception:
+        return TestCaseResponse(testcases=[], checker_code="")
