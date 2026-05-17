@@ -713,6 +713,9 @@ This is the SAMPLE/SMALL stress-validation phase. Keep every input suitable for 
 - when variables like n, m, q, t exist, keep them at most 60 unless the sample already exceeds that
 - keep each full stdin under 5000 characters
 - include official sample inputs first when they are present and count allows
+- make this pool useful for WA validation: include minimum-size cases such as n=1,
+  all-equal or repeated values, and all-negative or mixed-sign values when the
+  constraints allow them
 - still cover edge patterns such as minimum size, boundaries, repeated values,
   overlapping updates, alternating values, and mixed query order
 """

@@ -40,6 +40,9 @@ import java.util.concurrent.CompletableFuture;
 public class ResultController implements Initializable {
     private static final int TLE_GENERATION_ATTEMPTS = 3;
     private static final int MAX_TLE_VALIDATION_CASES = 3;
+    private static final int MAX_WA_RETRIES = 3;
+    private static final int MAX_WA_VALIDATION_CASES = 5;
+    private static final int MAX_WA_PROMPT_CASES = 3;
 
     @FXML private ComboBox<String> codeTypeCombo;
     @FXML private ComboBox<String> languageCombo;
@@ -163,6 +166,9 @@ public class ResultController implements Initializable {
 
     private CodeSubmission generateCodeWithValidation(String codeType, String language)
             throws Exception {
+        if ("WA".equals(codeType)) {
+            return generateWaCodeWithValidation(language);
+        }
         if (!"TLE".equals(codeType)) {
             return aiService.generateCode(problem, codeType, language);
         }
@@ -212,6 +218,239 @@ public class ResultController implements Initializable {
                         + " lan. Ly do gan nhat: "
                         + lastFailure
         );
+    }
+
+    private CodeSubmission generateWaCodeWithValidation(String language) throws Exception {
+        List<TestCase> validationCases = waValidationCases();
+        List<TestCase> promptCases = waPromptCases(validationCases);
+        if (validationCases.isEmpty()) {
+            CodeSubmission submission = aiService.generateCode(
+                    problem,
+                    "WA",
+                    language,
+                    promptCases,
+                    null,
+                    ""
+            );
+            appendSubmissionExplanation(
+                    submission,
+                    "Local WA validation skipped: no testcase with usable expected output."
+            );
+            return submission;
+        }
+
+        CodeSubmission lastSubmission = null;
+        WaValidationResult lastValidation = new WaValidationResult(
+                false,
+                "WA validation has not run.",
+                List.of()
+        );
+        String feedback = "";
+
+        for (int retry = 0; retry <= MAX_WA_RETRIES; retry++) {
+            CodeSubmission submission;
+            try {
+                if (retry == 0) {
+                    setSummaryAsync("Dang sinh code WA...");
+                    submission = aiService.generateCode(
+                            problem,
+                            "WA",
+                            language,
+                            promptCases,
+                            null,
+                            feedback
+                    );
+                } else {
+                    setSummaryAsync("WA retry lan " + retry + "/" + MAX_WA_RETRIES + "...");
+                    submission = aiService.retryWACode(
+                            problem,
+                            language,
+                            feedback,
+                            promptCases
+                    );
+                }
+            } catch (Exception e) {
+                if (hasSource(lastSubmission)) {
+                    appendSubmissionExplanation(
+                            lastSubmission,
+                            "Local WA retry stopped: " + rootCauseMessage(e)
+                    );
+                    return lastSubmission;
+                }
+                throw e;
+            }
+
+            lastSubmission = submission;
+            setSummaryAsync("Dang validate code WA lan " + (retry + 1) + "...");
+            WaValidationResult validation = validateWaSubmission(
+                    submission,
+                    language,
+                    validationCases
+            );
+            lastValidation = validation;
+            if (validation.valid()) {
+                appendSubmissionExplanation(
+                        submission,
+                        "Local WA validation: " + validation.message()
+                );
+                return submission;
+            }
+
+            feedback = buildWaFeedback(validation);
+        }
+
+        if (hasSource(lastSubmission)) {
+            appendSubmissionExplanation(
+                    lastSubmission,
+                    "Local WA validation warning: "
+                            + lastValidation.message()
+                            + "\nReturned after "
+                            + MAX_WA_RETRIES
+                            + " retries without a confirmed WA verdict."
+            );
+            return lastSubmission;
+        }
+
+        throw new RuntimeException(
+                "AI chua tao duoc code WA sau "
+                        + MAX_WA_RETRIES
+                        + " retry. Ly do gan nhat: "
+                        + lastValidation.message()
+        );
+    }
+
+    private WaValidationResult validateWaSubmission(
+            CodeSubmission submission,
+            String requestedLanguage,
+            List<TestCase> validationCases
+    ) {
+        if (!hasSource(submission)) {
+            return new WaValidationResult(false, "Code WA rong.", List.of());
+        }
+
+        String language = valueOrEmpty(submission.getLanguage()).isBlank()
+                ? requestedLanguage
+                : submission.getLanguage();
+        List<TestCase> probes = validationCases.stream()
+                .map(this::copyForValidation)
+                .toList();
+        try {
+            executionService.runTestCases(submission.getCode(), language, probes);
+        } catch (Exception e) {
+            return new WaValidationResult(false, rootCauseMessage(e), probes);
+        }
+
+        int wrongAnswer = 0;
+        int accepted = 0;
+        List<String> nonWaVerdicts = new ArrayList<>();
+        for (TestCase probe : probes) {
+            String verdict = valueOrEmpty(probe.getVerdict());
+            if ("WA".equals(verdict)) {
+                wrongAnswer++;
+            } else if ("AC".equals(verdict)) {
+                accepted++;
+            } else {
+                nonWaVerdicts.add(
+                        valueOrEmpty(probe.getId())
+                                + "="
+                                + (verdict.isBlank() ? "UNKNOWN" : verdict)
+                );
+            }
+        }
+
+        if (wrongAnswer > 0) {
+            return new WaValidationResult(
+                    true,
+                    "WA candidate hop le: "
+                            + wrongAnswer
+                            + "/"
+                            + probes.size()
+                            + " validation cases ra WA.",
+                    probes
+            );
+        }
+        if (accepted == probes.size()) {
+            return new WaValidationResult(
+                    false,
+                    "WA code pass het "
+                            + probes.size()
+                            + " validation cases.",
+                    probes
+            );
+        }
+        return new WaValidationResult(
+                false,
+                "WA code khong tao WRONG ANSWER; verdict khac: "
+                        + String.join(", ", nonWaVerdicts),
+                probes
+        );
+    }
+
+    private List<TestCase> waValidationCases() {
+        List<TestCase> available = testCases.stream()
+                .filter(this::hasUsableExpectedOutput)
+                .toList();
+        List<TestCase> selected = new ArrayList<>();
+        for (TestCase testCase : available) {
+            if (selected.size() >= MAX_WA_VALIDATION_CASES) {
+                break;
+            }
+            if (isSmallCase(testCase)) {
+                selected.add(testCase);
+            }
+        }
+        for (TestCase testCase : available) {
+            if (selected.size() >= MAX_WA_VALIDATION_CASES) {
+                break;
+            }
+            if (!selected.contains(testCase)) {
+                selected.add(testCase);
+            }
+        }
+        return List.copyOf(selected);
+    }
+
+    private List<TestCase> waPromptCases(List<TestCase> validationCases) {
+        return validationCases.stream()
+                .filter(testCase -> valueOrEmpty(testCase.getInput()).length() <= 4000)
+                .filter(testCase -> valueOrEmpty(testCase.getExpectedOutput()).length() <= 4000)
+                .limit(MAX_WA_PROMPT_CASES)
+                .toList();
+    }
+
+    private boolean hasUsableExpectedOutput(TestCase testCase) {
+        if (testCase == null
+                || testCase.getInput() == null
+                || testCase.getInput().isBlank()) {
+            return false;
+        }
+        String expected = valueOrEmpty(testCase.getExpectedOutput()).strip();
+        return !expected.isBlank() && !"N/A".equalsIgnoreCase(expected);
+    }
+
+    private String buildWaFeedback(WaValidationResult validation) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("The previous WA code did not produce a WRONG ANSWER verdict. ");
+        builder.append("It must compile, run, and print a wrong output on at least one case.\n");
+        builder.append("Local validation result: ")
+                .append(validation == null ? "unknown" : validation.message())
+                .append("\n\n");
+
+        List<TestCase> probes = validation == null ? List.of() : validation.probes();
+        for (int i = 0; i < Math.min(MAX_WA_PROMPT_CASES, probes.size()); i++) {
+            TestCase probe = probes.get(i);
+            builder.append("Case ")
+                    .append(i + 1)
+                    .append(":\nInput:\n")
+                    .append(truncateForPrompt(probe.getInput(), 1200))
+                    .append("\nExpected output:\n")
+                    .append(truncateForPrompt(probe.getExpectedOutput(), 600))
+                    .append("\nPrevious actual output:\n")
+                    .append(truncateForPrompt(probe.getActualOutput(), 600))
+                    .append("\n\n");
+        }
+        builder.append("Pick exactly one subtle bug that fails one of these cases with WA.");
+        return builder.toString();
     }
 
     private TleValidationResult validateTleSubmission(
@@ -353,6 +592,28 @@ public class ResultController implements Initializable {
                 source.getDescription(),
                 source.isEdgeCase()
         );
+    }
+
+    private boolean hasSource(CodeSubmission submission) {
+        return submission != null
+                && submission.getCode() != null
+                && !submission.getCode().isBlank();
+    }
+
+    private void appendSubmissionExplanation(CodeSubmission submission, String addition) {
+        if (submission == null || addition == null || addition.isBlank()) {
+            return;
+        }
+        String existing = valueOrEmpty(submission.getExplanation()).strip();
+        submission.setExplanation(existing.isBlank() ? addition : existing + "\n\n" + addition);
+    }
+
+    private String truncateForPrompt(String value, int maxLength) {
+        String text = valueOrEmpty(value).strip();
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength).stripTrailing() + "\n...[truncated]";
     }
 
     private void setSummaryAsync(String message) {
@@ -682,6 +943,13 @@ public class ResultController implements Initializable {
     }
 
     private record TleValidationResult(boolean valid, String message) {
+    }
+
+    private record WaValidationResult(
+            boolean valid,
+            String message,
+            List<TestCase> probes
+    ) {
     }
 
     private String valueOrEmpty(String value) {

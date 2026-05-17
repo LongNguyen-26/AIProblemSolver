@@ -236,6 +236,17 @@ public class AIBridgeService {
         return HttpUtil.postJson(baseUrl + "/codegen", body, CodeSubmission.class);
     }
 
+    public CodeSubmission retryWACode(Problem problem, String language, String feedback,
+                                      List<TestCase> sampleCases) throws Exception {
+        Map<String, Object> body = new HashMap<>();
+        body.put("problem", problem);
+        body.put("language", language);
+        body.put("feedback", feedback == null ? "" : feedback);
+        body.put("sample_cases", sampleCases == null ? List.of() : sampleCases);
+
+        return HttpUtil.postJson(baseUrl + "/codegen/wa_retry", body, CodeSubmission.class);
+    }
+
     public StressResult runStress(Problem problem, List<TestCase> smallCases,
                                   int rounds) throws Exception {
         Map<String, Object> body = new HashMap<>();

@@ -52,8 +52,9 @@ TYPE_INSTRUCTIONS = {
         "deterministic canonical valid solution."
     ),
     "WA": (
-        "Write a solution with a subtle bug that gives WRONG ANSWER on some "
-        "cases. The bug should not be obvious."
+        "Write a solution with exactly one subtle bug that gives WRONG ANSWER "
+        "on specific cases while still compiling and following the correct "
+        "overall algorithm structure."
     ),
     "TLE": (
         "Write a solution that is logically CORRECT and should pass sample, small, "
@@ -77,6 +78,46 @@ TYPE_INSTRUCTIONS = {
 }
 
 
+WA_SYSTEM_PROMPT = """You are an expert competitive programmer tasked with writing
+INTENTIONALLY WRONG solutions. Your bugs must be subtle, not obvious, but must
+cause wrong output on specific inputs. The solution must compile and run."""
+
+
+WA_USER_PROMPT = """Problem:
+{problem_description}
+
+Input format: {input_format}
+Output format: {output_format}
+Constraints:
+{constraints}
+
+Sample or validation test cases (your code MUST fail with wrong output on at
+least one of these if cases are provided):
+{sample_cases_formatted}
+
+TASK: Write a {language} solution that:
+1. Compiles and runs without errors
+2. Uses the CORRECT algorithm structure, not random output or brute guessing
+3. Contains EXACTLY ONE subtle bug from this list, choosing the most natural fit:
+   - Off-by-one: wrong loop bound (i < n instead of i <= n, or vice versa)
+   - Wrong initialization: variable init to 0 instead of -1e18, or INT_MAX instead of 0
+   - Missing edge case: does not handle n=1, all-equal array, negative values, or empty input
+   - Wrong formula: small arithmetic error, such as n*(n-1)/2 instead of n*(n+1)/2
+   - Wrong greedy choice: correct greedy structure but picks min instead of max, or vice versa
+   - Wrong DP transition: dp[i] uses wrong previous state, such as dp[i-2] instead of dp[i-1]
+4. Matches the local runner conventions: Java must use public class Main, C++ must
+   define int main(), and Python must read from standard input
+
+REQUIRED: Add these three comment lines at the very top of your code using the
+target language line comment prefix ({comment_prefix}):
+{comment_prefix} BUG_TYPE: [name of bug category chosen above]
+{comment_prefix} BUG_DESC: [one sentence: what is wrong and why it fails]
+{comment_prefix} FAILS_ON: [describe the shape of input that exposes this bug]
+
+Output ONLY the source code. No markdown fences and no explanation outside the
+required comments.{retry_note}"""
+
+
 def generate_code(
     problem: ProblemSchema,
     code_type: str,
@@ -85,6 +126,18 @@ def generate_code(
     complexity_info: dict[str, Any] | ComplexityInfo | None = None,
     error_log: str = "",
 ) -> CodeGenResponse:
+    code_type = (code_type or "AC").upper()
+    if code_type == "WA":
+        code = _generate_wa_code(problem, language, validation_cases or [], error_log)
+        if not code.strip():
+            raise RuntimeError("AI response did not include generated WA code")
+        return CodeGenResponse(
+            code=code,
+            language=language,
+            type=code_type,
+            explanation=_wa_explanation(code),
+        )
+
     instruction = _instruction_for_code_type(code_type, complexity_info)
     validation_text = _validation_cases_prompt(validation_cases or [], code_type)
     error_feedback_text = _error_feedback_prompt(error_log)
@@ -130,6 +183,105 @@ Escape all line breaks inside the code string as \\n.
         type=code_type,
         explanation=explanation,
     )
+
+
+def _generate_wa_code(
+    problem: ProblemSchema,
+    language: str,
+    validation_cases: list[TestCaseSchema],
+    error_log: str = "",
+) -> str:
+    prompt = _build_wa_prompt(problem, language, validation_cases, error_log)
+    content = request_text(
+        [
+            {"role": "system", "content": WA_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+    )
+    return _strip_code_fence(content)
+
+
+def _build_wa_prompt(
+    problem: ProblemSchema,
+    language: str,
+    sample_cases: list[TestCaseSchema],
+    error_log: str = "",
+) -> str:
+    comment_prefix = _line_comment_prefix(language)
+    retry_note = (
+        "\n\nPREVIOUS ATTEMPT FEEDBACK:\n"
+        + error_log.strip()
+        + "\nChoose a bug that specifically fails one of the passed cases above."
+        if error_log and error_log.strip()
+        else ""
+    )
+    return WA_USER_PROMPT.format(
+        problem_description=value_or_na(problem.description),
+        input_format=value_or_na(problem.input_format),
+        output_format=value_or_na(problem.output_format),
+        constraints="\n".join(problem.constraints or []) or "N/A",
+        sample_cases_formatted=_format_wa_sample_cases(sample_cases),
+        language=language,
+        comment_prefix=comment_prefix,
+        retry_note=retry_note,
+    )
+
+
+def _format_wa_sample_cases(sample_cases: list[TestCaseSchema]) -> str:
+    examples: list[str] = []
+    for index, case in enumerate((sample_cases or [])[:3], start=1):
+        input_text = _case_text(case, "input").strip()
+        expected = _case_text(case, "expected_output").strip()
+        if not input_text or not expected:
+            continue
+        examples.append(
+            f"Case #{index}\n"
+            f"Input:\n{_truncate_prompt_text(input_text, 2500)}\n"
+            f"Expected output:\n{_truncate_prompt_text(expected, 1000)}"
+        )
+    if not examples:
+        return (
+            "No validation cases were provided. Choose a natural edge shape from "
+            "the constraints and make the single bug fail there."
+        )
+    return "\n\n".join(examples)
+
+
+def _line_comment_prefix(language: str) -> str:
+    normalized = (language or "").lower().strip()
+    if normalized in {"python", "py"}:
+        return "#"
+    return "//"
+
+
+def _case_text(case: TestCaseSchema | dict[str, Any], field: str) -> str:
+    if isinstance(case, dict):
+        value = case.get(field, "")
+    else:
+        value = getattr(case, field, "")
+    return "" if value is None else str(value)
+
+
+def _truncate_prompt_text(value: str, limit: int) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...[truncated]"
+
+
+def _wa_explanation(code: str) -> str:
+    metadata = []
+    for line in value_or_na(code).splitlines()[:8]:
+        stripped = line.strip()
+        if "BUG_TYPE:" in stripped or "BUG_DESC:" in stripped or "FAILS_ON:" in stripped:
+            metadata.append(stripped)
+    if metadata:
+        return "Intentional WA candidate. " + " ".join(metadata)
+    return "Intentional WA candidate with a subtle single bug."
+
+
+def value_or_na(value: str) -> str:
+    return value if value and str(value).strip() else "N/A"
 
 
 def _generate_code_text(

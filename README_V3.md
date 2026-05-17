@@ -1,6 +1,6 @@
 # AIProblemSolver README V3
 
-Tai lieu nay la snapshot sau khi lam viec voi `docs/UPGRADE_ROADMAP_V3.md` va `docs/UPGRADE_ROADMAP_V3.1.md`. Phase E da don lai cac artifact Phase B sai huong va thay bang logic dam bao phan phoi 3 profile SMALL/MEDIUM/KILLER.
+Tai lieu nay la snapshot sau khi lam viec voi `docs/UPGRADE_ROADMAP_V3.md` va `docs/UPGRADE_ROADMAP_V3.1.md`. Phase E da don lai cac artifact Phase B sai huong va thay bang logic dam bao phan phoi 3 profile SMALL/MEDIUM/KILLER. Phase D da them prompt/validation retry de WA code co xac suat cao that su ra WA tren testcases hien co.
 
 Ngay kiem tra gan nhat: 2026-05-17.
 
@@ -151,6 +151,26 @@ Sinh code AC/WA/TLE/reference oracle. Request hien co:
 
 TLE prompt da duoc fix tu cac task truoc: cam sleep/dummy/infinite loop/random va yeu cau neu chuong trinh chay xong thi output phai dung.
 
+WA prompt hien dung V2:
+
+- Yeu cau code compile/run.
+- Yeu cau dung cau truc thuat toan dung nhung co dung 1 bug tinh vi.
+- Yeu cau metadata comment o dau source: `BUG_TYPE`, `BUG_DESC`, `FAILS_ON`.
+- Khi Java truyen validation cases, prompt yeu cau WA fail tren it nhat 1 case do.
+
+### `POST /codegen/wa_retry`
+
+Endpoint rieng cho Java goi khi WA code vua sinh lai pass het validation cases.
+
+Request:
+
+- `problem`
+- `language`
+- `feedback`
+- `sample_cases`
+
+Response dung `CodeGenResponse` voi `type = "WA"`.
+
 ### `POST /stress`
 
 Chay Python `StressTestingAgent`, generate/fix brute oracle, optimized oracle, input generator, compare brute vs optimized, tra `StressResult`.
@@ -247,13 +267,28 @@ Da ap dung:
 - `src/main/resources/fxml/testcase_view.fxml`
   - Da go bo `coverageLabel`.
 
-### Phase D - WA code phai that su WA: chua implement
+### Phase D - WA code phai that su WA: da implement
 
-Chua thay cac thay doi Phase D:
+Da ap dung:
 
-- Chua co WA prompt v2 day du trong `code_generator.py`.
-- Chua co post-generation WA validation/retry trong Java `ResultController`.
-- Chua co endpoint `/codegen/wa_retry`.
+- `ai_service/services/code_generator.py`
+  - Them `WA_SYSTEM_PROMPT` va `WA_USER_PROMPT`.
+  - Khi `code_type == "WA"`, dung prompt text rieng thay vi prompt JSON chung.
+  - Prompt yeu cau dung 1 bug tinh vi va metadata comment `BUG_TYPE`, `BUG_DESC`, `FAILS_ON`.
+  - Prompt nhan validation/sample cases va retry feedback de ep fail tren cases da pass.
+- `ai_service/models/schemas.py`
+  - Them `WaRetryRequest`.
+- `ai_service/routers/codegen.py`
+  - Them endpoint `POST /codegen/wa_retry`, tra `CodeGenResponse`.
+- `src/main/java/org/example/service/AIBridgeService.java`
+  - Them `retryWACode(...)` goi `/codegen/wa_retry`.
+- `src/main/java/org/example/ui/controller/ResultController.java`
+  - Khi sinh WA, chay validate local tren toi da 5 testcase co expected output, uu tien SMALL.
+  - Neu co it nhat 1 verdict `WA`, chap nhan code.
+  - Neu pass het, goi retry toi da 3 lan voi feedback gom input/expected/actual.
+  - Neu van chua confirm WA sau retry, van hien code cuoi cung kem warning trong explanation, khong crash UI.
+- `ai_service/services/testcase_generator.py`
+  - SMALL profile prompt duoc bo sung cac pattern huu ich cho WA validation: n=1/minimum size, all-equal/repeated, all-negative/mixed-sign khi constraints cho phep, va sample inputs.
 
 ## 7. Kiem Tra Reverse Hien Tai
 
@@ -328,4 +363,4 @@ Neu session sau thay cac symbol Phase B quay lai, can coi do la regression tru k
 - Pipeline cache luu problem/testcase input, khong luu expected output Java da tinh.
 - Quality gate KILLER la heuristic.
 - Image mode chua di qua pipeline SSE.
-- Phase D chua lam, nen WA code co the van pass tat ca testcases neu AI sinh bug qua nhe.
+- WA validation chi chay tren toi da 5 testcase co expected output, uu tien SMALL; neu pool testcase yeu hoac expected output la `N/A`, van co the chua confirm duoc WA that su.

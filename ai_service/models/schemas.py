@@ -118,6 +118,13 @@ class CodeGenRequest(BaseModel):
     complexity_info: dict = Field(default_factory=dict)
 
 
+class WaRetryRequest(BaseModel):
+    problem: ProblemSchema
+    language: str = "cpp"
+    feedback: str = ""
+    sample_cases: List[TestCaseSchema] = Field(default_factory=list)
+
+
 class CodeGenResponse(BaseModel):
     code: str
     language: str
