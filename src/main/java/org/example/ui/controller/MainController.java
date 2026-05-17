@@ -18,6 +18,7 @@ import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
 import org.example.model.CodeSubmission;
+import org.example.model.PipelineProgress;
 import org.example.model.Problem;
 import org.example.model.StressResult;
 import org.example.model.TestCase;
@@ -192,7 +193,11 @@ public class MainController implements Initializable {
         try {
             Problem problem = imageMode
                     ? aiService.analyzeProblemImage(imageBase64)
-                    : aiService.analyzeProblemText(text);
+                    : null;
+
+            if (!imageMode) {
+                return analyzeAndGenerateWithPipeline(text, testCaseCount, includeEdgeCases);
+            }
 
             TestPyramidPlan plan = buildTestPyramidPlan(testCaseCount);
 
@@ -218,9 +223,102 @@ public class MainController implements Initializable {
         }
     }
 
+    private AnalyzeResult analyzeAndGenerateWithPipeline(
+            String text,
+            int testCaseCount,
+            boolean includeEdgeCases
+    ) throws Exception {
+        setStatusAsync("Dang chay pipeline agent...");
+        PipelineProgress done = aiService.runPipeline(
+                text,
+                testCaseCount,
+                includeEdgeCases,
+                EXPECTED_OUTPUT_LANGUAGE,
+                this::onPipelineProgress
+        );
+
+        if (done == null) {
+            throw new RuntimeException("Pipeline did not return progress.");
+        }
+        if ("ERROR".equals(valueOrEmpty(done.getState()))) {
+            throw new RuntimeException(valueOrEmpty(done.getMessage()));
+        }
+        Problem problem = done.getProblem();
+        if (problem == null) {
+            throw new RuntimeException("Pipeline did not return analyzed problem.");
+        }
+
+        TestPyramidPlan plan = buildTestPyramidPlan(testCaseCount);
+        ProfileBuckets buckets = splitPipelineCases(done.getAllTestCases());
+        List<TestCase> smallCases = buckets.smallCases().isEmpty()
+                ? generateProfileCases(problem, plan.smallCount(), includeEdgeCases, "SMALL")
+                : takeCases(sanitizeTestCases(buckets.smallCases()), plan.smallCount());
+        if (smallCases.isEmpty()) {
+            throw new RuntimeException("Pipeline did not generate runnable SMALL input cases.");
+        }
+        tagProfileCases(smallCases, "SMALL");
+
+        setProgressAsync(92);
+        setStatusAsync("Pipeline da sinh input; dang tinh Expected Output...");
+        ExpectedBatch batch = buildStressTestCases(
+                problem,
+                smallCases,
+                buckets.mediumCases(),
+                buckets.killerCases(),
+                plan,
+                includeEdgeCases
+        );
+
+        String message = batch.message();
+        if (done.isCached()) {
+            message += "; dung cache pipeline";
+        }
+        List<String> warnings = done.getWarnings() == null ? List.of() : done.getWarnings();
+        if (!warnings.isEmpty()) {
+            message += "; warnings: " + String.join(" | ", warnings);
+        }
+        setProgressAsync(100);
+        return new AnalyzeResult(
+                problem,
+                batch.testCases(),
+                message,
+                batch.preferredAcSubmission()
+        );
+    }
+
+    private void onPipelineProgress(PipelineProgress progress) {
+        if (progress == null) {
+            return;
+        }
+        setProgressAsync(progress.getProgressPct());
+        String message = valueOrEmpty(progress.getMessage());
+        if (message.isBlank()) {
+            message = valueOrEmpty(progress.getState());
+        }
+        setStatusAsync(message);
+    }
+
     private ExpectedBatch buildStressTestCases(
             Problem problem,
             List<TestCase> smallCases,
+            TestPyramidPlan plan,
+            boolean includeEdgeCases
+    ) throws Exception {
+        return buildStressTestCases(
+                problem,
+                smallCases,
+                List.of(),
+                List.of(),
+                plan,
+                includeEdgeCases
+        );
+    }
+
+    private ExpectedBatch buildStressTestCases(
+            Problem problem,
+            List<TestCase> smallCases,
+            List<TestCase> seededMediumCases,
+            List<TestCase> seededKillerCases,
             TestPyramidPlan plan,
             boolean includeEdgeCases
     ) throws Exception {
@@ -233,6 +331,8 @@ public class MainController implements Initializable {
             return buildCanonicalAcExpectedCases(
                     problem,
                     validationCases,
+                    seededMediumCases,
+                    seededKillerCases,
                     plan,
                     includeEdgeCases
             );
@@ -328,14 +428,16 @@ public class MainController implements Initializable {
                 plan.mediumCount(),
                 includeEdgeCases,
                 "MEDIUM",
-                optimized
+                optimized,
+                seededMediumCases
         );
         List<TestCase> killerCases = generateOptimizedExpectedCases(
                 problem,
                 plan.killerCount(),
                 includeEdgeCases,
                 "KILLER",
-                optimized
+                optimized,
+                seededKillerCases
         );
 
         List<TestCase> allCases = fillToCount(
@@ -414,6 +516,8 @@ public class MainController implements Initializable {
     private ExpectedBatch buildCanonicalAcExpectedCases(
             Problem problem,
             List<TestCase> validationCases,
+            List<TestCase> seededMediumCases,
+            List<TestCase> seededKillerCases,
             TestPyramidPlan plan,
             boolean includeEdgeCases
     ) throws Exception {
@@ -437,14 +541,16 @@ public class MainController implements Initializable {
                 plan.mediumCount(),
                 includeEdgeCases,
                 "MEDIUM",
-                canonical
+                canonical,
+                seededMediumCases
         );
         List<TestCase> killerCases = generateOptimizedExpectedCases(
                 problem,
                 plan.killerCount(),
                 includeEdgeCases,
                 "KILLER",
-                canonical
+                canonical,
+                seededKillerCases
         );
 
         List<TestCase> allCases = fillToCount(
@@ -499,17 +605,44 @@ public class MainController implements Initializable {
             String profile,
             OracleRun optimized
     ) {
+        return generateOptimizedExpectedCases(
+                problem,
+                count,
+                includeEdgeCases,
+                profile,
+                optimized,
+                List.of()
+        );
+    }
+
+    private List<TestCase> generateOptimizedExpectedCases(
+            Problem problem,
+            int count,
+            boolean includeEdgeCases,
+            String profile,
+            OracleRun optimized,
+            List<TestCase> seededCases
+    ) {
         if (count <= 0) {
             return List.of();
         }
         try {
             setStatusAsync("Dang sinh " + profile + " tests de bat TLE...");
-            List<TestCase> cases = generateProfileCases(
-                    problem, count, includeEdgeCases, profile
-            );
+            List<TestCase> cases = takeCases(sanitizeTestCases(seededCases), count);
+            if (cases.size() < count) {
+                List<TestCase> generated = generateProfileCases(
+                        problem,
+                        count - cases.size(),
+                        includeEdgeCases,
+                        profile
+                );
+                cases = mergeUniqueCases(cases, generated);
+                cases = takeCases(cases, count);
+            }
             if (cases.isEmpty()) {
                 return List.of();
             }
+            tagProfileCases(cases, profile);
             setStatusAsync("Dang tinh Expected Output cho " + profile + " tests...");
             List<String> outputs = expectedOutputExecutionService.generateOutputs(
                     optimized.code(),
@@ -813,6 +946,23 @@ public class MainController implements Initializable {
         return new ArrayList<>(uniqueByInput.values());
     }
 
+    private ProfileBuckets splitPipelineCases(List<TestCase> cases) {
+        List<TestCase> small = new ArrayList<>();
+        List<TestCase> medium = new ArrayList<>();
+        List<TestCase> killer = new ArrayList<>();
+        for (TestCase testCase : cases == null ? List.<TestCase>of() : cases) {
+            String description = valueOrEmpty(testCase.getDescription()).toUpperCase(Locale.ROOT);
+            if (description.contains("[KILLER]") || description.contains("KILLER")) {
+                killer.add(testCase);
+            } else if (description.contains("[MEDIUM]") || description.contains("MEDIUM")) {
+                medium.add(testCase);
+            } else {
+                small.add(testCase);
+            }
+        }
+        return new ProfileBuckets(small, medium, killer);
+    }
+
     @SafeVarargs
     private final List<TestCase> mergeUniqueCases(List<TestCase>... groups) {
         Map<String, TestCase> uniqueByInput = new LinkedHashMap<>();
@@ -936,10 +1086,17 @@ public class MainController implements Initializable {
     private void setLoading(boolean loading) {
         progressBar.setVisible(loading);
         progressBar.setManaged(loading);
+        progressBar.setProgress(loading ? ProgressBar.INDETERMINATE_PROGRESS : 0.0);
     }
 
     private void setStatus(String message) {
         statusLabel.setText(message);
+    }
+
+    private void setProgressAsync(int progressPct) {
+        Platform.runLater(() ->
+                progressBar.setProgress(Math.max(0, Math.min(100, progressPct)) / 100.0)
+        );
     }
 
     private void showError(String message) {
@@ -1008,6 +1165,13 @@ public class MainController implements Initializable {
             OracleRun oracle,
             String message,
             int roundsCompleted
+    ) {
+    }
+
+    private record ProfileBuckets(
+            List<TestCase> smallCases,
+            List<TestCase> mediumCases,
+            List<TestCase> killerCases
     ) {
     }
 

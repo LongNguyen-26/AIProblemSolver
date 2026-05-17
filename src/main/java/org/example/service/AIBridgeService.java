@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.example.model.CodeSubmission;
 import org.example.model.ComplexityInfo;
+import org.example.model.PipelineProgress;
 import org.example.model.Problem;
 import org.example.model.StressResult;
 import org.example.model.TestCase;
@@ -13,18 +14,30 @@ import org.example.util.AppConfig;
 import org.example.util.HttpUtil;
 
 import java.time.Duration;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 public class AIBridgeService {
     private static final int MAX_TESTCASE_ATTEMPTS = 3;
 
     private final String baseUrl;
     private final Gson gson = new Gson();
+    private final HttpClient streamingClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
 
     public AIBridgeService() {
         this(AppConfig.get("ai.service.baseUrl"));
@@ -226,6 +239,59 @@ public class AIBridgeService {
                 StressResult.class,
                 Duration.ofSeconds(180)
         );
+    }
+
+    public PipelineProgress runPipeline(
+            String problemText,
+            int count,
+            boolean includeEdgeCases,
+            String languagePreference,
+            Consumer<PipelineProgress> onProgress
+    ) throws Exception {
+        Map<String, Object> body = new HashMap<>();
+        body.put("problem_text", problemText == null ? "" : problemText);
+        body.put("count", count);
+        body.put("include_edge_cases", includeEdgeCases);
+        body.put("language_preference",
+                languagePreference == null || languagePreference.isBlank()
+                        ? "python"
+                        : languagePreference);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/pipeline/run"))
+                .version(HttpClient.Version.HTTP_1_1)
+                .timeout(Duration.ofMinutes(10))
+                .header("Accept", "text/event-stream")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        gson.toJson(body),
+                        StandardCharsets.UTF_8
+                ))
+                .build();
+
+        HttpResponse<Stream<String>> response = streamingClient.send(
+                request,
+                HttpResponse.BodyHandlers.ofLines()
+        );
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new RuntimeException("HTTP " + response.statusCode());
+        }
+
+        AtomicReference<PipelineProgress> latest = new AtomicReference<>();
+        try (Stream<String> lines = response.body()) {
+            lines.forEach(line -> {
+                if (line == null || !line.startsWith("data: ")) {
+                    return;
+                }
+                String json = line.substring("data: ".length());
+                PipelineProgress progress = gson.fromJson(json, PipelineProgress.class);
+                latest.set(progress);
+                if (onProgress != null) {
+                    onProgress.accept(progress);
+                }
+            });
+        }
+        return latest.get();
     }
 
     private String normalizeBaseUrl(String value) {

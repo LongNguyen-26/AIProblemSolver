@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from routers import analyze, codegen, stress, testcase
+from routers import analyze, codegen, pipeline, stress, testcase
 
 app = FastAPI(title="AIProblemSolver AI Service", version="1.0.0")
 
@@ -8,6 +8,7 @@ app.include_router(analyze.router)
 app.include_router(testcase.router)
 app.include_router(codegen.router)
 app.include_router(stress.router)
+app.include_router(pipeline.router)
 
 
 @app.get("/health")

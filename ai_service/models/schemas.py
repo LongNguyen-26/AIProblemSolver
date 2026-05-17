@@ -69,6 +69,25 @@ class TestCaseResponse(BaseModel):
     checker_code: str = ""
 
 
+class PipelineRequest(BaseModel):
+    problem_text: str
+    count: int = 10
+    include_edge_cases: bool = True
+    language_preference: str = "python"
+
+
+class PipelineProgress(BaseModel):
+    state: str
+    message: str
+    progress_pct: int = 0
+    testcases_ready: int = 0
+    testcases_target: int = 0
+    warnings: List[str] = Field(default_factory=list)
+    problem: Optional[ProblemSchema] = None
+    all_testcases: List[TestCaseSchema] = Field(default_factory=list)
+    cached: bool = False
+
+
 class StressRequest(BaseModel):
     problem: ProblemSchema
     small_cases: List[TestCaseSchema] = Field(default_factory=list)
